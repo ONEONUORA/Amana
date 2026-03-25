@@ -1,19 +1,20 @@
 import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "./lib/prisma";
 import { EventListenerService } from "./services/eventListener.service";
+import { tradeRoutes } from "./routes/trade.routes";
 import { walletRoutes } from "./routes/wallet.routes";
 
 dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
-const prisma = new PrismaClient();
 
 app.use(cors());
 app.use(express.json());
 
+app.use("/trades", tradeRoutes);
 app.use("/wallet", walletRoutes);
 
 app.get("/health", (_req, res) => {

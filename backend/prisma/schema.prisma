@@ -8,6 +8,7 @@ datasource db {
 }
 
 enum TradeStatus {
+  PENDING_SIGNATURE
   CREATED
   FUNDED
   DELIVERED
