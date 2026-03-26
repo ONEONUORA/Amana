@@ -8,7 +8,7 @@ import { PrismaClient } from "@prisma/client";
 import { EventListenerService } from "./services/eventListener.service";
 import { walletRoutes } from "./routes/wallet.routes";
 
-dotenv.config();
+import { env } from './config/env';\n\nenv; // Validate early
 
 const app = createApp();
 const port = Number(process.env.PORT || 4000);
