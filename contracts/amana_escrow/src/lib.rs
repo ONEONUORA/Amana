@@ -1271,6 +1271,109 @@ mod test {
         client.initiate_dispute(&trade_id, &seller, &reason2); // second: must panic
     }
 
+    /// A stranger (neither buyer nor seller) cannot initiate a dispute.
+    #[test]
+    #[should_panic(expected = "Only the buyer or seller can initiate a dispute")]
+    fn test_stranger_cannot_initiate_dispute() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let amount = 10_000_i128;
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id);
+
+        // Stranger tries to initiate dispute
+        let stranger = Address::generate(&env);
+        let reason = soroban_sdk::String::from_str(&env, "QmMaliciousDispute");
+        client.initiate_dispute(&trade_id, &stranger, &reason);
+    }
+
+    /// Dispute cannot be initiated after trade is completed.
+    #[test]
+    #[should_panic(expected = "Trade must be in Funded status to initiate a dispute")]
+    fn test_dispute_fails_after_trade_completed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let amount = 10_000_i128;
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id);
+        
+        // Complete the trade successfully
+        client.confirm_delivery(&trade_id);
+        client.release_funds(&trade_id);
+
+        // Try to initiate dispute after completion
+        let reason = soroban_sdk::String::from_str(&env, "QmTooLateDispute");
+        client.initiate_dispute(&trade_id, &buyer, &reason);
+    }
+
+    /// Dispute record stores correct IPFS hash and can be retrieved.
+    #[test]
+    fn test_dispute_record_stores_ipfs_hash_correctly() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let amount = 10_000_i128;
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id);
+
+        // Set specific timestamp
+        env.ledger().with_mut(|l| l.timestamp = 12_345);
+
+        // Initiate dispute with detailed IPFS hash
+        let ipfs_reason = soroban_sdk::String::from_str(
+            &env, 
+            "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+        );
+        client.initiate_dispute(&trade_id, &seller, &ipfs_reason);
+
+        // Verify dispute record is stored correctly
+        let record = client.get_dispute_record(&trade_id).expect("DisputeRecord must exist");
+        
+        assert_eq!(record.initiator, seller, "Initiator should be seller");
+        assert_eq!(record.reason_hash, ipfs_reason, "Reason hash should match IPFS CID");
+        assert_eq!(record.disputed_at, 12_345, "Timestamp should be recorded correctly");
+
+        // Verify trade status changed
+        let trade = client.get_trade(&trade_id);
+        assert!(matches!(trade.status, TradeStatus::Disputed), "Trade should be in Disputed status");
+        assert_eq!(trade.updated_at, 12_345, "Trade updated_at should match dispute timestamp");
+    }
+
     // -----------------------------------------------------------------------
     // Mediator registry tests
     // -----------------------------------------------------------------------
