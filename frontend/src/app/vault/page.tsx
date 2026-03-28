@@ -1,5 +1,7 @@
 "use client";
 
+import React from "react";
+
 import {
   AuditLogCard,
   ContractManifestCard,
@@ -8,6 +10,7 @@ import {
   VaultHero,
   VaultValueCard,
 } from "@/components/vault";
+import { DriverManifestForm, type DriverManifestData } from "@/components/ui";
 import { useFreighterIdentity } from "@/hooks/useFreighterIdentity";
 
 const FOOTER_CONTENT = {
@@ -69,6 +72,9 @@ export default function VaultPage() {
         ? "Permission required"
         : "Freighter not detected";
 
+  const [isManifestOpen, setIsManifestOpen] = React.useState(false);
+  const [manifestData, setManifestData] = React.useState<DriverManifestData | null>(null);
+
   return (
     <section className="min-h-full bg-bg-primary px-6 py-8 lg:px-10">
       <div className="max-w-7xl mx-auto space-y-8">
@@ -98,6 +104,25 @@ export default function VaultPage() {
               )}
             </div>
           </div>
+        </div>
+
+        <div className="rounded-2xl border border-border-default bg-card p-4 md:p-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <p className="text-sm font-medium text-text-secondary">Driver/Vehicle Manifest</p>
+            <button
+              onClick={() => setIsManifestOpen(true)}
+              className="rounded-lg bg-gold px-4 py-2 text-sm font-semibold text-text-inverse transition-colors hover:bg-gold-hover"
+            >
+              Log Driver Details
+            </button>
+          </div>
+          {manifestData && (
+            <div className="mt-4 rounded-lg border border-border-default bg-bg-elevated p-3 text-sm text-text-primary">
+              <p><strong>Driver:</strong> {manifestData.driverName}</p>
+              <p><strong>Phone:</strong> {manifestData.driverPhone}</p>
+              <p><strong>License:</strong> {manifestData.licensePlate}</p>
+            </div>
+          )}
         </div>
 
         <VaultHero
@@ -189,6 +214,15 @@ export default function VaultPage() {
             </div>
           </div>
         </div>
+
+        <DriverManifestForm
+          isOpen={isManifestOpen}
+          onDismiss={() => setIsManifestOpen(false)}
+          onComplete={(data) => {
+            setManifestData(data);
+            setIsManifestOpen(false);
+          }}
+        />
 
         <VaultFooter
           version={FOOTER_CONTENT.version}
