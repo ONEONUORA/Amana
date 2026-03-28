@@ -243,6 +243,7 @@ impl EscrowContract {
         if env.storage().instance().has(&DataKey::Initialized) {
             panic!("AlreadyInitialized");
         }
+        assert!(fee_bps <= 10_000, "fee_bps must not exceed 10000");
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::UsdcContract, &usdc_contract);
@@ -338,6 +339,7 @@ impl EscrowContract {
 
     pub fn create_trade(env: Env, buyer: Address, seller: Address, amount: i128, buyer_loss_bps: u32, seller_loss_bps: u32) -> u64 {
         assert!(amount > 0, "amount must be greater than zero");
+        assert!(buyer != seller, "buyer and seller must be different addresses");
         assert!(buyer_loss_bps + seller_loss_bps == 10_000, "loss ratios must sum to 10000 (100%)");
         let next_id: u64 = env.storage().instance().get(&NEXT_TRADE_ID).unwrap_or(1_u64);
         let ledger_seq = env.ledger().sequence() as u64;
@@ -499,6 +501,7 @@ impl EscrowContract {
     /// dispute brief so the full content lives off-chain but is committed here.
     pub fn initiate_dispute(env: Env, trade_id: u64, initiator: Address, reason_hash: String) {
         initiator.require_auth();
+        assert!(reason_hash.len() > 0, "reason_hash must not be empty");
 
         let key = DataKey::Trade(trade_id);
         let mut trade: Trade = env.storage().persistent().get(&key).expect("Trade not found");
@@ -1892,6 +1895,354 @@ mod test {
             }])
             .remove_mediator(&mediator);
     }
+
+    // -----------------------------------------------------------------------
+    // Input validation tests (#190)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "fee_bps must not exceed 10000")]
+    fn test_initialize_rejects_fee_bps_over_10000() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &usdc_id, &treasury, &10_001_u32);
+    }
+
+    #[test]
+    fn test_initialize_accepts_fee_bps_at_boundary_10000() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        let treasury = Address::generate(&env);
+        // 10_000 bps (100%) is the maximum allowed — must not panic
+        client.initialize(&admin, &usdc_id, &treasury, &10_000_u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "buyer and seller must be different addresses")]
+    fn test_create_trade_rejects_self_trade() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let actor = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &usdc_id, &treasury, &100_u32);
+        client.create_trade(&actor, &actor, &1_000_i128, &5000_u32, &5000_u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "reason_hash must not be empty")]
+    fn test_initiate_dispute_rejects_empty_reason_hash() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let amount = 1_000_i128;
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100_u32);
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id);
+        let empty = soroban_sdk::String::from_str(&env, "");
+        client.initiate_dispute(&trade_id, &buyer, &empty);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_submit_video_proof_rejects_empty_cid() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let amount = 1_000_i128;
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100_u32);
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id);
+        let empty_cid = soroban_sdk::String::from_str(&env, "");
+        client.submit_video_proof(&trade_id, &buyer, &empty_cid);
+    }
+
+    // -----------------------------------------------------------------------
+    // Payout invariant and boundary tests (#191)
+    // -----------------------------------------------------------------------
+
+    /// Helper: run a full dispute resolution and return (seller_net, buyer_refund, fee).
+    fn resolve_and_balances(
+        env: &Env,
+        buyer_loss_bps: u32,
+        seller_loss_bps: u32,
+        seller_gets_bps: u32,
+        fee_bps: u32,
+        amount: i128,
+    ) -> (i128, i128, i128) {
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(env, &contract_id);
+        let admin = Address::generate(env);
+        let buyer = Address::generate(env);
+        let seller = Address::generate(env);
+        let treasury = Address::generate(env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &fee_bps);
+        let token_mint = token::StellarAssetClient::new(env, &usdc_id);
+        token_mint.mint(&buyer, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &buyer_loss_bps, &seller_loss_bps);
+        client.deposit(&trade_id);
+        let reason = soroban_sdk::String::from_str(env, "QmInvariantTest");
+        client.initiate_dispute(&trade_id, &buyer, &reason);
+        let mediator = Address::generate(env);
+        client.set_mediator(&mediator);
+        client.resolve_dispute(&trade_id, &mediator, &seller_gets_bps);
+        let tok = token::Client::new(env, &usdc_id);
+        (tok.balance(&seller), tok.balance(&buyer), tok.balance(&treasury))
+    }
+
+    /// Conservation invariant: seller_net + buyer_refund + fee == total for all inputs.
+    #[test]
+    fn test_payout_conservation_invariant() {
+        // Table of (buyer_loss_bps, seller_loss_bps, seller_gets_bps, fee_bps, amount)
+        let cases: &[(u32, u32, u32, u32, i128)] = &[
+            (5000, 5000, 5000, 100, 10_000),
+            (5000, 5000, 10000, 100, 10_000),
+            (5000, 5000, 0, 100, 10_000),
+            (10000, 0, 8000, 100, 10_000),
+            (0, 10000, 3000, 100, 10_000),
+            (7000, 3000, 6000, 100, 10_000),
+            (2000, 8000, 9000, 100, 10_000),
+            (5000, 5000, 5000, 0, 10_000),
+            (5000, 5000, 5000, 10000, 10_000),
+            (5000, 5000, 5000, 100, 1),
+            (5000, 5000, 5000, 100, 1_000_000),
+        ];
+        for &(blb, slb, sgb, fb, amt) in cases {
+            let env = Env::default();
+            env.mock_all_auths();
+            let (seller_net, buyer_refund, fee) =
+                resolve_and_balances(&env, blb, slb, sgb, fb, amt);
+            assert_eq!(
+                seller_net + buyer_refund + fee,
+                amt,
+                "conservation failed: blb={blb} slb={slb} sgb={sgb} fb={fb} amt={amt}"
+            );
+        }
+    }
+
+    /// Non-negativity: no payout component is negative.
+    #[test]
+    fn test_payout_non_negativity() {
+        let cases: &[(u32, u32, u32, u32, i128)] = &[
+            (5000, 5000, 0, 100, 10_000),
+            (5000, 5000, 10000, 10000, 10_000),
+            (0, 10000, 0, 100, 10_000),
+            (10000, 0, 10000, 100, 10_000),
+        ];
+        for &(blb, slb, sgb, fb, amt) in cases {
+            let env = Env::default();
+            env.mock_all_auths();
+            let (seller_net, buyer_refund, fee) =
+                resolve_and_balances(&env, blb, slb, sgb, fb, amt);
+            assert!(seller_net >= 0, "seller_net negative");
+            assert!(buyer_refund >= 0, "buyer_refund negative");
+            assert!(fee >= 0, "fee negative");
+        }
+    }
+
+    /// Monotonicity: increasing seller_gets_bps must not decrease seller payout
+    /// (with fixed 50/50 loss-sharing ratios).
+    #[test]
+    fn test_payout_seller_monotonicity() {
+        let bps_steps = [0_u32, 2000, 4000, 5000, 6000, 8000, 10000];
+        let mut prev_seller = -1_i128;
+        for &sgb in &bps_steps {
+            let env = Env::default();
+            env.mock_all_auths();
+            let (seller_net, _, _) = resolve_and_balances(&env, 5000, 5000, sgb, 100, 10_000);
+            assert!(
+                seller_net >= prev_seller,
+                "seller payout decreased: sgb={sgb} seller_net={seller_net} prev={prev_seller}"
+            );
+            prev_seller = seller_net;
+        }
+    }
+
+    /// Bounds: seller_gets_bps > 10_000 must panic.
+    #[test]
+    #[should_panic(expected = "seller_gets_bps must be <= 10_000")]
+    fn test_resolve_panics_on_seller_gets_bps_over_10000() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _usdc_id, _buyer, _seller, _treasury, trade_id) =
+            setup_disputed_trade(&env, 10_000, 100);
+        let mediator = Address::generate(&env);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.set_mediator(&mediator);
+        client.resolve_dispute(&trade_id, &mediator, &10_001_u32);
+    }
+
+    // -----------------------------------------------------------------------
+    // Auth / state guard matrix tests (#189)
+    // confirm_delivery x release_funds x cancel_trade
+    // -----------------------------------------------------------------------
+
+    // --- confirm_delivery guards ---
+
+    #[test]
+    #[should_panic]
+    fn test_confirm_delivery_rejects_non_buyer_caller() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _usdc, _buyer, seller, _treasury, trade_id) =
+            setup_funded_trade(&env, 10_000, 100);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        // seller is not the buyer — must be rejected
+        client
+            .mock_auths(&[soroban_sdk::testutils::MockAuth {
+                address: &seller,
+                invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "confirm_delivery",
+                    args: soroban_sdk::vec![&env,
+                        soroban_sdk::IntoVal::<Env, soroban_sdk::Val>::into_val(&trade_id, &env)],
+                    sub_invokes: &[],
+                },
+            }])
+            .confirm_delivery(&trade_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Trade must be funded")]
+    fn test_confirm_delivery_rejects_wrong_status() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+        // Trade is Created (not Funded)
+        let trade_id = client.create_trade(&buyer, &seller, &1_000_i128, &5000_u32, &5000_u32);
+        client.confirm_delivery(&trade_id);
+    }
+
+    // --- release_funds guards ---
+
+    #[test]
+    #[should_panic]
+    fn test_release_funds_rejects_non_buyer_caller() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _usdc, _buyer, seller, _treasury, trade_id) =
+            setup_funded_trade(&env, 10_000, 100);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.confirm_delivery(&trade_id);
+        // seller tries to release — must be rejected
+        client
+            .mock_auths(&[soroban_sdk::testutils::MockAuth {
+                address: &seller,
+                invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "release_funds",
+                    args: soroban_sdk::vec![&env,
+                        soroban_sdk::IntoVal::<Env, soroban_sdk::Val>::into_val(&trade_id, &env)],
+                    sub_invokes: &[],
+                },
+            }])
+            .release_funds(&trade_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Trade must be delivered")]
+    fn test_release_funds_rejects_wrong_status() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _usdc, _buyer, _seller, _treasury, trade_id) =
+            setup_funded_trade(&env, 10_000, 100);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        // Trade is Funded, not Delivered
+        client.release_funds(&trade_id);
+    }
+
+    // --- cancel_trade guards ---
+
+    #[test]
+    #[should_panic(expected = "Unauthorized caller")]
+    fn test_cancel_trade_rejects_third_party_in_created_status() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+        let trade_id = client.create_trade(&buyer, &seller, &1_000_i128, &5000_u32, &5000_u32);
+        let stranger = Address::generate(&env);
+        client.cancel_trade(&trade_id, &stranger);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized caller")]
+    fn test_cancel_trade_rejects_third_party_in_funded_status() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _usdc, _buyer, _seller, _treasury, trade_id) =
+            setup_funded_trade(&env, 10_000, 100);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let stranger = Address::generate(&env);
+        client.cancel_trade(&trade_id, &stranger);
+    }
+
+    #[test]
+    fn test_admin_immediate_cancel_in_funded_status() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let amount = 5_000_i128;
+        let usdc_id = env.register_stellar_asset_contract(admin.clone());
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+        let token_mint = token::StellarAssetClient::new(&env, &usdc_id);
+        token_mint.mint(&buyer, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id);
+        // Admin cancels immediately without needing both parties
+        client.cancel_trade(&trade_id, &admin);
+        assert!(matches!(client.get_trade(&trade_id).status, TradeStatus::Cancelled));
+        let tok = token::Client::new(&env, &usdc_id);
+        assert_eq!(tok.balance(&buyer), amount, "buyer must be fully refunded");
+        assert_eq!(tok.balance(&client.address), 0, "escrow must be empty");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2385,6 +2736,8 @@ mod integration_tests {
         // Second submission must panic
         let cid2 = soroban_sdk::String::from_str(&s.env, "QmSecondProof");
         client.submit_video_proof(&trade_id, &s.seller, &cid2);
+    }
+
     /// Evidence submission fails after dispute is resolved.
     #[test]
     #[should_panic(expected = "Evidence can only be submitted for a Disputed trade")]
@@ -2396,11 +2749,12 @@ mod integration_tests {
         // Raise dispute
         s.env.ledger().with_mut(|l| l.timestamp = 1_000);
         let dispute_reason = soroban_sdk::String::from_str(&s.env, "QmDisputeReason");
-      
+        client.initiate_dispute(&trade_id, &s.buyer, &dispute_reason);
+
         // Resolve dispute
         s.env.ledger().with_mut(|l| l.timestamp = 2_000);
-     
-        
+        client.resolve_dispute(&trade_id, &s.mediator, &10_000_u32);
+
         // Try to submit evidence after resolution - should fail
         s.env.ledger().with_mut(|l| l.timestamp = 3_000);
         let ipfs_hash = soroban_sdk::String::from_str(&s.env, "QmLateEvidence");
@@ -2420,7 +2774,8 @@ mod integration_tests {
         assert_eq!(evidence_list.len(), 0, "Evidence list should be empty for non-disputed trade");
         
         // Confirm delivery (no dispute path)
-      
+        client.confirm_delivery(&trade_id);
+
         // Evidence list should still be empty
         let evidence_list_after = client.get_evidence_list(&trade_id);
         assert_eq!(evidence_list_after.len(), 0, "Evidence list should remain empty after delivery confirmation");
@@ -2454,11 +2809,12 @@ mod integration_tests {
         // Create trade with 30/70 loss-sharing (seller bears 70% of loss)
         let trade_id = client.create_trade(&buyer, &seller, &amount, &3000_u32, &7000_u32);
         client.deposit(&trade_id);
-        client.raise_dispute(&trade_id, &buyer);
-        
+        let reason = soroban_sdk::String::from_str(&env, "QmAsymmetricDispute");
+        client.initiate_dispute(&trade_id, &buyer, &reason);
+
         let mediator = Address::generate(&env);
         client.set_mediator(&mediator);
-        
+
         // Mediator rules 40% for seller (60% loss - buyer wins)
         // loss = 60% = 6,000
         // seller bears: 6,000 * 70% = 4,200
@@ -2467,14 +2823,14 @@ mod integration_tests {
         // fee = 5,800 * 1% = 58
         // seller_net = 5,742
         // buyer_refund = 4,200
-        client.resolve_dispute(&trade_id, &4_000_u32);
-        
+        client.resolve_dispute(&trade_id, &mediator, &4_000_u32);
+
         let token = token::Client::new(&env, &usdc_id);
         assert_eq!(token.balance(&seller), 5_742, "seller with 70% loss burden");
         assert_eq!(token.balance(&treasury), 58, "fee on seller portion");
         assert_eq!(token.balance(&buyer), 4_200, "buyer refund with 30% loss burden");
         assert_eq!(token.balance(&client.address), 0, "escrow empty");
-        
+
         // Verify total adds up
         assert_eq!(5_742 + 58 + 4_200, 10_000, "total must equal original amount");
     }
@@ -2553,7 +2909,7 @@ mod integration_tests {
         // Step 7: Mediator resolves dispute (65% for seller, 35% loss)
         env.ledger().with_mut(|l| l.timestamp = 7_000);
         client.set_mediator(&mediator);
-        client.resolve_dispute(&trade_id, &6_500_u32);
+        client.resolve_dispute(&trade_id, &mediator, &6_500_u32);
         
         // Step 8: Verify final state
         let trade = client.get_trade(&trade_id);
@@ -2602,11 +2958,12 @@ mod integration_tests {
         // Create trade with 60/40 loss-sharing
         let trade_id = client.create_trade(&buyer, &seller, &amount, &6000_u32, &4000_u32);
         client.deposit(&trade_id);
-        client.raise_dispute(&trade_id, &buyer);
-        
+        let reason = soroban_sdk::String::from_str(&env, "QmSmallAmountDispute");
+        client.initiate_dispute(&trade_id, &buyer, &reason);
+
         let mediator = Address::generate(&env);
         client.set_mediator(&mediator);
-        
+
         // Mediator rules 55% for seller (45% loss)
         // loss = 45% of 100 = 45
         // seller bears: 45 * 40% = 18
@@ -2615,7 +2972,7 @@ mod integration_tests {
         // fee = 82 * 1% = 0.82 = 0 (integer division)
         // seller_net = 82 - 0 = 82
         // buyer_refund = 18
-        client.resolve_dispute(&trade_id, &5_500_u32);
+        client.resolve_dispute(&trade_id, &mediator, &5_500_u32);
         
         let token = token::Client::new(&env, &usdc_id);
         let seller_balance = token.balance(&seller);
