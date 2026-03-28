@@ -151,7 +151,7 @@ export class TradeController {
         return res.status(404).json({ error: "Trade not found" });
       }
 
-      if (trade.buyer !== callerAddress) {
+      if (trade.buyerAddress !== callerAddress) {
         return res.status(403).json({ error: "Forbidden" });
       }
 

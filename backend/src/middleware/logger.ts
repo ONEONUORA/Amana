@@ -2,21 +2,27 @@ import pinoHttp from 'pino-http';
 import pino from 'pino';
 import { env } from '../config/env';
 
-export const appLogger = pino({
-  level: env.NODE_ENV === 'production' ? 'info' : 'debug',
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true,
-    },
-  },
-});
+const isTest = env.NODE_ENV === 'test';
+
+export const appLogger = pino(
+  isTest
+    ? { level: 'silent' }
+    : {
+        level: env.NODE_ENV === 'production' ? 'info' : 'debug',
+        transport: {
+          target: 'pino-pretty',
+          options: { colorize: true },
+        },
+      },
+);
 
 export default pinoHttp({
   logger: appLogger,
-  serializers: pinoHttp.stdSerializers,
   autoLogging: {
-    ignore: (req) => req.path.match(/^\/health/) || req.path.match(/^\/api\/docs/),
+    ignore: (req) => {
+      const url = (req as any).url ?? '';
+      return !!url.match(/^\/health/) || !!url.match(/^\/api\/docs/);
+    },
   },
 });
 
