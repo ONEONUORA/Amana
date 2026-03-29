@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
+import { useMemo, useState } from "react";
 import {
   Address,
   BASE_FEE,
@@ -14,14 +13,8 @@ import {
 import { signTransaction } from "@stellar/freighter-api";
 
 import { useFreighterIdentity } from "@/hooks/useFreighterIdentity";
-import { Badge } from "@/components/ui/Badge";
-import { WalletAddressBadge } from "@/components/ui/WalletAddressBadge";
-import { Spinner } from "@/components/ui/Spinner";
 
-type Props = {
-  disputeId: string;
-  initialCid?: string;
-};
+type Props = { disputeId: string };
 
 const DEFAULT_MEDIATOR_ADDRESSES = ["GEXAMPLEMEDIATORPUBLICKEY1"];
 
@@ -33,76 +26,13 @@ const PINATA_GATEWAYS = [
 
 const DEFAULT_NETWORK_PASSPHRASE = Networks.TESTNET;
 
-function isLikelyIpfsCid(value: string): boolean {
-  const normalized = value.trim();
-  return normalized.startsWith("Qm") || normalized.startsWith("bafy");
-}
-
-function firstValidCidFromUnknown(input: unknown): string | null {
-  if (!input) {
-    return null;
-  }
-
-  if (typeof input === "string") {
-    return isLikelyIpfsCid(input) ? input : null;
-  }
-
-  if (Array.isArray(input)) {
-    for (const item of input) {
-      const cid = firstValidCidFromUnknown(item);
-      if (cid) {
-        return cid;
-      }
-    }
-    return null;
-  }
-
-  if (typeof input === "object") {
-    const record = input as Record<string, unknown>;
-    const candidateKeys = [
-      "cid",
-      "ipfsCid",
-      "ipfs_cid",
-      "evidenceCid",
-      "evidence_cid",
-      "videoCid",
-      "video_cid",
-      "hash",
-      "IpfsHash",
-    ];
-
-    for (const key of candidateKeys) {
-      const value = record[key];
-      const cid = firstValidCidFromUnknown(value);
-      if (cid) {
-        return cid;
-      }
-    }
-
-    for (const value of Object.values(record)) {
-      const cid = firstValidCidFromUnknown(value);
-      if (cid) {
-        return cid;
-      }
-    }
-  }
-
-  return null;
-}
-
-export default function MediatorPanelClient({ disputeId, initialCid }: Props) {
+export default function MediatorPanelClient({ disputeId }: Props) {
   const { address, isAuthorized, isLoading, connectWallet } =
     useFreighterIdentity();
+  const [execString, setExecString] = useState<string>("");
   const [txStatus, setTxStatus] = useState<string>("");
   const [isSubmittingTx, setIsSubmittingTx] = useState(false);
   const [activeGatewayIndex, setActiveGatewayIndex] = useState(0);
-  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
-  const [selectedSellerGetsBps, setSelectedSellerGetsBps] = useState<
-    5000 | 7000 | null
-  >(null);
-  const [isVideoLoading, setIsVideoLoading] = useState(true);
-  const [fetchedCid, setFetchedCid] = useState("");
-  const [isFetchingCid, setIsFetchingCid] = useState(false);
 
   const mediatorAddresses = useMemo(() => {
     const fromEnv = (process.env.NEXT_PUBLIC_MEDIATOR_WALLETS ?? "")
@@ -115,76 +45,12 @@ export default function MediatorPanelClient({ disputeId, initialCid }: Props) {
 
   const isMediator = Boolean(address && mediatorAddresses.includes(address));
 
-  const cid = useMemo(() => {
-    if (fetchedCid && isLikelyIpfsCid(fetchedCid)) {
-      return fetchedCid;
-    }
-    if (initialCid && isLikelyIpfsCid(initialCid)) {
-      return initialCid;
-    }
-    if (isLikelyIpfsCid(disputeId)) {
-      return disputeId;
-    }
-    return "";
-  }, [fetchedCid, initialCid, disputeId]);
+  const cid = disputeId || "QmExampleCidForDemo";
+  const pinataUrl = `${PINATA_GATEWAYS[activeGatewayIndex]}/${cid}`;
 
-  useEffect(() => {
-    let isActive = true;
-
-    async function fetchEvidenceCid() {
-      const numericTradeId = Number(disputeId);
-      if (!Number.isInteger(numericTradeId) || numericTradeId < 0) {
-        return;
-      }
-
-      if (initialCid && isLikelyIpfsCid(initialCid)) {
-        return;
-      }
-
-      const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() ?? "";
-      const endpoint = `${baseUrl}/trades/${numericTradeId}/evidence`;
-
-      setIsFetchingCid(true);
-      try {
-        const response = await fetch(endpoint, {
-          method: "GET",
-          credentials: "include",
-        });
-
-        if (!response.ok) {
-          return;
-        }
-
-        const payload = (await response.json()) as unknown;
-        const discoveredCid = firstValidCidFromUnknown(payload);
-        if (discoveredCid && isActive) {
-          setFetchedCid(discoveredCid);
-          setIsVideoLoading(true);
-        }
-      } catch {
-        // Gracefully continue without CID when evidence endpoint is unavailable.
-      } finally {
-        if (isActive) {
-          setIsFetchingCid(false);
-        }
-      }
-    }
-
-    void fetchEvidenceCid();
-
-    return () => {
-      isActive = false;
-    };
-  }, [disputeId, initialCid]);
-
-  const pinataUrl = cid
-    ? `${PINATA_GATEWAYS[activeGatewayIndex]}/${cid}`
-    : "";
-
-  function openResolutionConfirmation(sellerGetsBps: 5000 | 7000) {
-    setSelectedSellerGetsBps(sellerGetsBps);
-    setIsConfirmOpen(true);
-    setTxStatus("");
+  function buildExec(split: string) {
+    const s = `soroban://execute?cmd=resolve_dispute&split=${split}&dispute=${disputeId}`;
+    setExecString(s);
   }
 
   async function executeResolution(sellerGetsBps: number) {
@@ -208,7 +74,7 @@ export default function MediatorPanelClient({ disputeId, initialCid }: Props) {
     }
 
     setIsSubmittingTx(true);
-    setTxStatus("Preparing transaction...");
+    setTxStatus("Preparing Soroban transaction...");
 
     try {
       const networkPassphrase =
@@ -264,102 +130,67 @@ export default function MediatorPanelClient({ disputeId, initialCid }: Props) {
       setTxStatus(`Submitted. Hash: ${sendResponse.hash}`);
     } catch (error) {
       setTxStatus(
-        error instanceof Error ? error.message : "Transaction execution failed",
+        error instanceof Error ? error.message : "Soroban execution failed",
       );
     } finally {
       setIsSubmittingTx(false);
-      setSelectedSellerGetsBps(null);
-      setIsConfirmOpen(false);
     }
   }
 
   return (
-    <>
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <div className="lg:col-span-7">
-          <div className="aspect-video bg-black rounded-xl overflow-hidden shadow-modal relative border border-border-default">
-            {pinataUrl ? (
-              <>
-                {isVideoLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                    <Spinner size="lg" aria-label="Loading evidence video" />
-                  </div>
-                )}
-                <video
-                  controls
-                  className="w-full h-full object-contain bg-black"
-                  src={pinataUrl}
-                  onLoadedData={() => setIsVideoLoading(false)}
-                  onError={() => {
-                    setIsVideoLoading(false);
-                    if (activeGatewayIndex < PINATA_GATEWAYS.length - 1) {
-                      setActiveGatewayIndex((prev) => prev + 1);
-                      setIsVideoLoading(true);
-                    } else {
-                      setTxStatus("Unable to load evidence video from configured gateways.");
-                    }
-                  }}
-                />
-              </>
-            ) : (
-              <div className="h-full w-full flex items-center justify-center text-center p-6 text-text-secondary text-sm">
-                {isFetchingCid
-                  ? "Looking up evidence record..."
-                  : "Evidence CID is not available for this dispute yet."}
-              </div>
-            )}
+    <div className="min-h-screen p-6 bg-gray-50">
+      <div className="max-w-6xl mx-auto grid grid-cols-12 gap-6">
+        <div className="col-span-7">
+          <div className="aspect-video bg-black rounded-xl overflow-hidden shadow-modal">
+            <video
+              controls
+              className="w-full h-full object-contain bg-black"
+              src={pinataUrl}
+              onError={() => {
+                if (activeGatewayIndex < PINATA_GATEWAYS.length - 1) {
+                  setActiveGatewayIndex((prev) => prev + 1);
+                }
+              }}
+            />
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-            <Badge variant={isMediator ? "success" : "danger"} size="sm" dot>
-              {isMediator ? "Mediator access" : "Not a mediator"}
-            </Badge>
-            <Badge variant="info" size="sm">
-              Gateway {activeGatewayIndex + 1}
-            </Badge>
-            {address ? (
-              <WalletAddressBadge
-                address={address}
-                truncate="middle"
-                showCopy
-                showExplorer
-              />
-            ) : (
-              <span className="text-text-secondary">Wallet not connected</span>
-            )}
-            <button
-              onClick={() =>
-                setActiveGatewayIndex(
-                  (prev) => (prev + 1) % PINATA_GATEWAYS.length,
-                )
-              }
-              className="px-3 py-1 rounded-md bg-elevated text-text-secondary hover:text-text-primary transition-colors"
-            >
-              Switch Gateway
-            </button>
+          <div className="mt-3 text-sm text-gray-600">
+            <div>Dispute ID: {disputeId}</div>
+            <div>Pinata CID: {cid}</div>
+            <div>Gateway: {PINATA_GATEWAYS[activeGatewayIndex]}</div>
+            <div>Mapped address: {address ?? "Not connected"}</div>
+            <div className="mt-2">
+              {isMediator ? (
+                <span className="px-2 py-1 bg-green-100 text-green-800 rounded">
+                  Mediator access
+                </span>
+              ) : (
+                <span className="px-2 py-1 bg-red-100 text-red-800 rounded">
+                  Not a mediator
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="lg:col-span-5">
-          <div className="bg-card border border-border-default rounded-2xl shadow-md p-5 space-y-4">
-            <h3 className="text-lg font-semibold text-text-primary">
-              Dispute Resolution
-            </h3>
-            <p className="text-sm text-text-secondary">
-              Select payout ratio for seller and confirm before on-chain signing.
+        <div className="col-span-5">
+          <div className="bg-white rounded-xl shadow-md p-5 space-y-4">
+            <h3 className="text-lg font-semibold">Loss Ratio Executor</h3>
+            <p className="text-sm text-gray-600">
+              Resolve dispute with explicit seller payout basis points.
             </p>
 
             {!isAuthorized && (
               <button
                 onClick={() => void connectWallet()}
                 disabled={isLoading}
-                className="w-full rounded-lg bg-gold text-text-inverse py-2.5 font-medium hover:bg-gold-hover transition-colors disabled:opacity-60"
+                className="w-full rounded-md bg-black text-white py-2"
               >
                 {isLoading ? "Connecting..." : "Connect Freighter"}
               </button>
             )}
 
             {!isMediator && (
-              <div className="rounded-md border border-status-danger/40 bg-status-danger/10 text-status-danger text-sm p-3">
+              <div className="rounded-md border border-red-200 bg-red-50 text-red-700 text-sm p-3">
                 Unauthorized wallet. Access is restricted to mediator addresses.
               </div>
             )}
@@ -367,88 +198,79 @@ export default function MediatorPanelClient({ disputeId, initialCid }: Props) {
             <div className="grid grid-cols-1 gap-3">
               <button
                 disabled={!isMediator || isSubmittingTx}
-                onClick={() => openResolutionConfirmation(5000)}
-                className="w-full rounded-lg bg-gold text-text-inverse px-3 py-2.5 font-medium hover:bg-gold-hover transition-colors disabled:opacity-50"
+                onClick={() => buildExec("50-50")}
+                className="w-full rounded-md border px-3 py-2 disabled:opacity-50"
+              >
+                Build 50/50 String
+              </button>
+
+              <button
+                disabled={!isMediator || isSubmittingTx}
+                onClick={() => buildExec("70-30")}
+                className="w-full rounded-md border px-3 py-2 disabled:opacity-50"
+              >
+                Build 70/30 String
+              </button>
+
+              <button
+                disabled={!isMediator || isSubmittingTx}
+                onClick={() => void executeResolution(5000)}
+                className="w-full rounded-md bg-emerald-700 text-white px-3 py-2 disabled:opacity-50"
               >
                 Resolve 50/50 On-Chain
               </button>
 
               <button
                 disabled={!isMediator || isSubmittingTx}
-                onClick={() => openResolutionConfirmation(7000)}
-                className="w-full rounded-lg bg-gold text-text-inverse px-3 py-2.5 font-medium hover:bg-gold-hover transition-colors disabled:opacity-50"
+                onClick={() => void executeResolution(7000)}
+                className="w-full rounded-md bg-emerald-700 text-white px-3 py-2 disabled:opacity-50"
               >
                 Resolve 70/30 On-Chain
               </button>
             </div>
 
-            <div className="rounded-md bg-elevated border border-border-default p-3 text-xs text-text-secondary space-y-1">
-              <div>Trade ID: {disputeId}</div>
-              <div>
-                Active gateway: {PINATA_GATEWAYS[activeGatewayIndex]}
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Generated Execution String
+              </label>
+              <textarea
+                readOnly
+                value={execString}
+                className="mt-1 block w-full rounded-md border-gray-200 shadow-sm h-24 p-2 text-sm"
+              />
+              <p className="mt-2 text-xs text-gray-600">{txStatus}</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  disabled={!execString}
+                  onClick={() => navigator.clipboard?.writeText(execString)}
+                  className="px-3 py-1 bg-blue-600 text-white rounded disabled:opacity-50"
+                >
+                  Copy
+                </button>
+                <a
+                  href={execString || "#"}
+                  onClick={(e) => {
+                    if (!execString) e.preventDefault();
+                  }}
+                  className="px-3 py-1 bg-gray-100 rounded text-sm"
+                >
+                  Preview
+                </a>
+                <button
+                  onClick={() =>
+                    setActiveGatewayIndex(
+                      (prev) => (prev + 1) % PINATA_GATEWAYS.length,
+                    )
+                  }
+                  className="px-3 py-1 bg-gray-100 rounded text-sm"
+                >
+                  Switch Gateway
+                </button>
               </div>
             </div>
-
-            {txStatus && <p className="text-xs text-text-secondary">{txStatus}</p>}
           </div>
         </div>
       </div>
-
-      <Dialog.Root open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-overlay backdrop-blur-lg z-50 flex items-center justify-center p-4">
-            <Dialog.Content className="bg-card border border-border-default shadow-modal max-w-md w-full rounded-2xl flex flex-col">
-              <div className="p-5 border-b border-border-default">
-                <Dialog.Title className="text-lg font-semibold text-text-primary">
-                  Confirm Resolution
-                </Dialog.Title>
-                <Dialog.Description className="text-sm text-text-secondary mt-1">
-                  Review payout split before opening Freighter to sign.
-                </Dialog.Description>
-              </div>
-
-              <div className="p-5 space-y-3 text-sm">
-                <div className="rounded-md border border-border-default bg-elevated p-3">
-                  <p className="text-text-secondary">Trade ID</p>
-                  <p className="font-medium text-text-primary">{disputeId}</p>
-                </div>
-                <div className="rounded-md border border-border-default bg-elevated p-3">
-                  <p className="text-text-secondary">Seller receives</p>
-                  <p className="font-medium text-text-primary">
-                    {selectedSellerGetsBps === 7000 ? "70%" : "50%"} ({selectedSellerGetsBps ?? 0} bps)
-                  </p>
-                </div>
-                <div className="rounded-md border border-border-default bg-elevated p-3">
-                  <p className="text-text-secondary">Buyer receives</p>
-                  <p className="font-medium text-text-primary">
-                    {selectedSellerGetsBps === 7000 ? "30%" : "50%"}
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-5 border-t border-border-default flex gap-3">
-                <button
-                  onClick={() => setIsConfirmOpen(false)}
-                  disabled={isSubmittingTx}
-                  className="flex-1 px-4 py-2 rounded-lg border border-border-default text-text-secondary hover:bg-elevated transition-colors disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  disabled={isSubmittingTx || selectedSellerGetsBps === null}
-                  onClick={() =>
-                    selectedSellerGetsBps !== null &&
-                    void executeResolution(selectedSellerGetsBps)
-                  }
-                  className="flex-1 px-4 py-2 rounded-lg bg-gold text-text-inverse font-medium hover:bg-gold-hover transition-colors disabled:opacity-50"
-                >
-                  {isSubmittingTx ? "Submitting..." : "Confirm & Sign"}
-                </button>
-              </div>
-            </Dialog.Content>
-          </Dialog.Overlay>
-        </Dialog.Portal>
-      </Dialog.Root>
-    </>
+    </div>
   );
 }
