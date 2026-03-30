@@ -1,19 +1,19 @@
-import { vi } from "vitest";
+import { jest } from "@jest/globals";
 import { EventType } from "../types/events";
+
+const vi = jest as any;
 
 /* ------------------------------------------------------------------ */
 /*  Hoisted mock variables (must be declared before vi.mock factories) */
 /* ------------------------------------------------------------------ */
 
-const { mockGetEvents, mockDispatchEvent, mockProcessEventAtomically } = vi.hoisted(() => ({
-  mockGetEvents: vi.fn(),
-  mockDispatchEvent: vi.fn().mockResolvedValue(undefined),
-  mockProcessEventAtomically: vi.fn().mockImplementation(
-    async (_prisma: unknown, event: unknown, handler: (...args: unknown[]) => Promise<void>) => {
-      await handler({} as unknown, event);
-    }
-  ),
-}));
+const mockGetEvents = vi.fn();
+const mockDispatchEvent = vi.fn().mockResolvedValue(undefined);
+const mockProcessEventAtomically = vi.fn().mockImplementation(
+  async (_prisma: unknown, event: unknown, handler: (...args: unknown[]) => Promise<void>) => {
+    await handler({} as unknown, event);
+  },
+);
 
 /* ------------------------------------------------------------------ */
 /*  Module-level mocks (hoisted by vitest)                            */
@@ -111,9 +111,9 @@ describe("EventListenerService", () => {
     // Override the server instance directly to use mockGetEvents
     (service as any).server = { getEvents: (...args: unknown[]) => mockGetEvents(...args) };
 
-    vi.spyOn(console, "log").mockImplementation();
-    vi.spyOn(console, "warn").mockImplementation();
-    vi.spyOn(console, "error").mockImplementation();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -577,8 +577,7 @@ describe("EventListenerService", () => {
         .mockReturnValueOnce("t-err");
       mockDispatchEvent.mockRejectedValueOnce(new Error("DB down"));
 
-      /* processEvent catches the error internally — should not bubble */
-      await expect(service.processEvent(raw as any)).resolves.not.toThrow();
+      await expect(service.processEvent(raw as any)).rejects.toThrow("DB down");
     });
 
     it("should not persist processedEvent when dispatchEvent fails", async () => {
@@ -588,7 +587,7 @@ describe("EventListenerService", () => {
         .mockReturnValueOnce("t-err2");
       mockDispatchEvent.mockRejectedValueOnce(new Error("DB down"));
 
-      await service.processEvent(raw as any);
+      await expect(service.processEvent(raw as any)).rejects.toThrow("DB down");
 
       expect(mockPrisma._mockTx.processedEvent.create).not.toHaveBeenCalled();
     });

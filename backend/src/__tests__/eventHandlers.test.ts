@@ -23,7 +23,7 @@ import {
 function createMockTx() {
   return {
     trade: {
-      upsert: jest.fn().mockResolvedValue({}),
+      upsert: jest.fn(async () => ({})),
     },
   } as unknown as Prisma.TransactionClient;
 }

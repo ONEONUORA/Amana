@@ -18,7 +18,7 @@ export async function isAlreadyProcessed(
   prisma: PrismaClient,
   key: { ledgerSequence: number; contractId: string; eventId: string }
 ): Promise<boolean> {
-  const existing = await prisma.processedEvent.findUnique({
+  const existing = await (prisma as any).processedEvent.findUnique({
     where: {
       ledgerSequence_contractId_eventId: key,
     },
@@ -49,7 +49,7 @@ export async function processEventAtomically(
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await handler(tx, event);
-      await tx.processedEvent.create({
+      await (tx as any).processedEvent.create({
         data: {
           ledgerSequence: event.ledgerSequence,
           contractId: event.contractId,
@@ -98,7 +98,7 @@ export class EventListenerService {
     this.running = true;
 
     // Hydrate in-memory set from DB on startup
-    const recentEvents = await this.prisma.processedEvent.findMany({
+    const recentEvents = await (this.prisma as any).processedEvent.findMany({
       orderBy: { ledgerSequence: "desc" },
       take: this.config.processedLedgersCacheSize,
     });
