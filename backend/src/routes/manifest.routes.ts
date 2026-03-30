@@ -1,7 +1,15 @@
 import { Router, Response } from "express";
 import { z } from "zod";
 import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
-import { ManifestService, ManifestForbiddenError, ManifestConflictError, ManifestTradeStatusError, ManifestTradeNotFoundError } from "../services/manifest.service";
+import {
+    ManifestService,
+    ManifestForbiddenError,
+    ManifestConflictError,
+    ManifestTradeStatusError,
+    ManifestTradeNotFoundError,
+    ManifestAccessDeniedError,
+    ManifestNotFoundError,
+} from "../services/manifest.service";
 import { ContractService } from "../services/contract.service";
 import { appLogger } from "../middleware/logger";
 
@@ -18,6 +26,37 @@ export function createManifestRouter(
     contractService = new ContractService(),
 ) {
     const router = Router({ mergeParams: true });
+
+    // GET /trades/:id/manifest
+    router.get("/", authMiddleware, async (req: AuthRequest, res: Response) => {
+        const callerAddress = req.user?.walletAddress;
+        if (!callerAddress) {
+            res.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+
+        try {
+            const manifest = await manifestService.getManifestByTradeId(
+                req.params.id as string,
+                callerAddress,
+            );
+            res.status(200).json(manifest);
+        } catch (err) {
+            if (
+                err instanceof ManifestTradeNotFoundError ||
+                err instanceof ManifestNotFoundError
+            ) {
+                res.status(404).json({ error: err.message });
+                return;
+            }
+            if (err instanceof ManifestAccessDeniedError) {
+                res.status(403).json({ error: err.message });
+                return;
+            }
+            appLogger.error({ err }, "[ManifestRoute] Error");
+            res.status(500).json({ error: "Failed to get manifest" });
+        }
+    });
 
     // POST /trades/:id/manifest
     router.post("/", authMiddleware, async (req: AuthRequest, res: Response) => {

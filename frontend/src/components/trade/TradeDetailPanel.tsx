@@ -5,6 +5,7 @@ import { TradeHeader } from "./TradeHeader";
 import { PartiesPanel } from "./PartiesPanel";
 import { FinancialSummary } from "./FinancialSummary";
 import { TradeTimeline } from "./TradeTimeline";
+import { TransactionTimeline } from "./TransactionTimeline";
 import { ContractInfo } from "./ContractInfo";
 import { ActionBar } from "./ActionBar";
 import { VaultSidebar } from "./VaultSidebar";
@@ -21,18 +22,23 @@ export function TradeDetailPanel({ trade }: TradeDetailPanelProps) {
     <div className="min-h-screen bg-primary pb-28">
       {/* Page grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full max-w-7xl mx-auto p-6">
-
         {/* ── Left column (main) ── */}
         <div className="lg:col-span-2 flex flex-col gap-6">
           <TradeHeader trade={trade} />
           <PartiesPanel buyer={trade.buyer} seller={trade.seller} />
           <FinancialSummary trade={trade} />
+          <TradeTimeline events={trade.timeline} />
         </div>
 
         {/* ── Right column (sidebar) ── */}
         <div className="lg:col-span-1 flex flex-col gap-6">
           <VaultSidebar trade={trade} />
-          <TradeTimeline events={trade.timeline} />
+          {trade.transactionTimeline && (
+            <TransactionTimeline
+              events={trade.transactionTimeline}
+              currentEventIndex={trade.currentTransactionIndex ?? 0}
+            />
+          )}
           <ContractInfo trade={trade} />
         </div>
       </div>

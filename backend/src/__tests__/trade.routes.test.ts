@@ -5,6 +5,7 @@ import * as StellarSdk from "@stellar/stellar-sdk";
 import { tradeRoutes } from "../routes/trade.routes";
 import { ContractService } from "../services/contract.service";
 import { TradeService } from "../services/trade.service";
+import { AuthService } from "../services/auth.service";
 
 jest.mock("../services/contract.service");
 jest.mock("../services/trade.service");
@@ -20,9 +21,34 @@ describe("Trade Routes", () => {
   let sellerToken: string;
 
   beforeAll(() => {
+    process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret-at-least-32-characters-long";
+    process.env.JWT_ISSUER = process.env.JWT_ISSUER || "amana";
+    process.env.JWT_AUDIENCE = process.env.JWT_AUDIENCE || "amana-api";
     const secret = process.env.JWT_SECRET!;
-    token = jwt.sign({ walletAddress: buyerAddress }, secret);
-    sellerToken = jwt.sign({ walletAddress: sellerAddress }, secret);
+    const now = Math.floor(Date.now() / 1000);
+    token = jwt.sign(
+      {
+        walletAddress: buyerAddress,
+        jti: "trade-routes-buyer-jti",
+        iss: process.env.JWT_ISSUER,
+        aud: process.env.JWT_AUDIENCE,
+        nbf: now - 1,
+      },
+      secret,
+      { algorithm: "HS256" },
+    );
+    sellerToken = jwt.sign(
+      {
+        walletAddress: sellerAddress,
+        jti: "trade-routes-seller-jti",
+        iss: process.env.JWT_ISSUER,
+        aud: process.env.JWT_AUDIENCE,
+        nbf: now - 1,
+      },
+      secret,
+      { algorithm: "HS256" },
+    );
+    jest.spyOn(AuthService, "isTokenRevoked").mockResolvedValue(false);
   });
 
   afterEach(() => {
@@ -157,5 +183,24 @@ describe("Trade Routes", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Trade must be in CREATED status");
+  });
+
+  it("does not create a pending trade when create_trade contract build fails", async () => {
+    (ContractService.prototype.buildCreateTradeTx as jest.Mock).mockRejectedValue(
+      new Error("simulate failed"),
+    );
+
+    const res = await request(app)
+      .post("/trades")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        sellerAddress,
+        amountUsdc: "125.1234567",
+        buyerLossBps: 5000,
+        sellerLossBps: 5000,
+      });
+
+    expect(res.status).toBe(500);
+    expect(TradeService.prototype.createPendingTrade).not.toHaveBeenCalled();
   });
 });

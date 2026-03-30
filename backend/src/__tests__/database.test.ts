@@ -339,5 +339,238 @@ const runDb = process.env.RUN_DATABASE_TESTS === "1";
       expect(tradeWithRelations?.buyer.id).toBe(buyer.id);
       expect(tradeWithRelations?.seller.id).toBe(seller.id);
     });
+
+    it('should reject trades when buyer relationship is missing', async () => {
+      await prisma.user.create({
+        data: {
+          walletAddress: 'gexisting_seller1234567890abcdefghijk',
+          displayName: 'Seller',
+        },
+      });
+
+      await expect(
+        prisma.trade.create({
+          data: {
+            tradeId: 'trade_missing_buyer_001',
+            buyerAddress: 'gmissing_buyer1234567890abcdefghijk',
+            sellerAddress: 'gexisting_seller1234567890abcdefghijk',
+            amountUsdc: '50',
+            status: 'CREATED',
+          },
+        })
+      ).rejects.toThrow();
+    });
+
+    it('should enforce one dispute per trade', async () => {
+      const buyer = await prisma.user.create({
+        data: {
+          walletAddress: 'gbuyer_unique_dispute1234567890abcd',
+          displayName: 'Buyer',
+        },
+      });
+
+      const seller = await prisma.user.create({
+        data: {
+          walletAddress: 'gseller_unique_dispute1234567890abc',
+          displayName: 'Seller',
+        },
+      });
+
+      const trade = await prisma.trade.create({
+        data: {
+          tradeId: 'trade_unique_dispute_001',
+          buyerAddress: buyer.walletAddress,
+          sellerAddress: seller.walletAddress,
+          amountUsdc: '500',
+          status: 'DISPUTED',
+        },
+      });
+
+      await prisma.dispute.create({
+        data: {
+          tradeId: trade.tradeId,
+          initiator: buyer.walletAddress,
+          reason: 'First dispute',
+          status: 'OPEN',
+        },
+      });
+
+      await expect(
+        prisma.dispute.create({
+          data: {
+            tradeId: trade.tradeId,
+            initiator: seller.walletAddress,
+            reason: 'Duplicate dispute',
+            status: 'OPEN',
+          },
+        })
+      ).rejects.toThrow();
+    });
+
+    it('should cascade delete dispute, manifest, and evidence when a trade is deleted', async () => {
+      const buyer = await prisma.user.create({
+        data: {
+          walletAddress: 'gbuyer_cascade_trade1234567890abcdef',
+          displayName: 'Buyer',
+        },
+      });
+
+      const seller = await prisma.user.create({
+        data: {
+          walletAddress: 'gseller_cascade_trade1234567890abcde',
+          displayName: 'Seller',
+        },
+      });
+
+      const trade = await prisma.trade.create({
+        data: {
+          tradeId: 'trade_cascade_001',
+          buyerAddress: buyer.walletAddress,
+          sellerAddress: seller.walletAddress,
+          amountUsdc: '220',
+          status: 'DISPUTED',
+        },
+      });
+
+      await prisma.dispute.create({
+        data: {
+          tradeId: trade.tradeId,
+          initiator: buyer.walletAddress,
+          reason: 'Cascade dispute',
+          status: 'OPEN',
+        },
+      });
+
+      await prisma.deliveryManifest.create({
+        data: {
+          tradeId: trade.tradeId,
+          driverName: 'Driver Test',
+          driverIdNumber: 'ID-001',
+          vehicleRegistration: 'ABC-123',
+          routeDescription: 'Kaduna to Lagos',
+          expectedDeliveryAt: new Date('2026-03-31T12:00:00.000Z'),
+          driverNameHash: 'a'.repeat(64),
+          driverIdHash: 'b'.repeat(64),
+        },
+      });
+
+      await prisma.tradeEvidence.create({
+        data: {
+          tradeId: trade.tradeId,
+          cid: 'bafybeicascadeevidence001',
+          filename: 'proof.jpg',
+          mimeType: 'image/jpeg',
+          uploadedBy: buyer.walletAddress,
+        },
+      });
+
+      await prisma.trade.delete({
+        where: { tradeId: trade.tradeId },
+      });
+
+      const [dispute, manifest, evidence] = await Promise.all([
+        prisma.dispute.findUnique({ where: { tradeId: trade.tradeId } }),
+        prisma.deliveryManifest.findUnique({ where: { tradeId: trade.tradeId } }),
+        prisma.tradeEvidence.findMany({ where: { tradeId: trade.tradeId } }),
+      ]);
+
+      expect(dispute).toBeNull();
+      expect(manifest).toBeNull();
+      expect(evidence).toHaveLength(0);
+    });
+
+    it('should cascade delete goals when a vault is deleted', async () => {
+      const user = await prisma.user.create({
+        data: {
+          walletAddress: 'gvault_owner1234567890abcdefghijklmn',
+          displayName: 'Vault Owner',
+        },
+      });
+
+      const vault = await prisma.vault.create({
+        data: {
+          vaultId: 'vault_cascade_001',
+          ownerAddress: user.walletAddress,
+          balanceUsdc: '1000',
+        },
+      });
+
+      await prisma.goal.create({
+        data: {
+          goalId: 'goal_cascade_001',
+          vaultId: vault.vaultId,
+          userId: user.id,
+          targetAmountUsdc: '2500',
+          currentAmountUsdc: '150',
+          deadline: new Date('2026-06-01T00:00:00.000Z'),
+          status: 'ACTIVE',
+        },
+      });
+
+      await prisma.vault.delete({
+        where: { vaultId: vault.vaultId },
+      });
+
+      const remainingGoal = await prisma.goal.findUnique({
+        where: { goalId: 'goal_cascade_001' },
+      });
+
+      expect(remainingGoal).toBeNull();
+    });
+
+    it('should preserve default status values for vault goals and disputes', async () => {
+      const buyer = await prisma.user.create({
+        data: {
+          walletAddress: 'gdefaults_buyer1234567890abcdefghijk',
+          displayName: 'Defaults Buyer',
+        },
+      });
+
+      const seller = await prisma.user.create({
+        data: {
+          walletAddress: 'gdefaults_seller1234567890abcdefghij',
+          displayName: 'Defaults Seller',
+        },
+      });
+
+      const vault = await prisma.vault.create({
+        data: {
+          vaultId: 'vault_defaults_001',
+          ownerAddress: buyer.walletAddress,
+        },
+      });
+
+      const trade = await prisma.trade.create({
+        data: {
+          tradeId: 'trade_defaults_001',
+          buyerAddress: buyer.walletAddress,
+          sellerAddress: seller.walletAddress,
+          amountUsdc: '1',
+        },
+      });
+
+      const goal = await prisma.goal.create({
+        data: {
+          goalId: 'goal_defaults_001',
+          vaultId: vault.vaultId,
+          userId: buyer.id,
+          targetAmountUsdc: '1200',
+          deadline: new Date('2026-12-31T00:00:00.000Z'),
+        },
+      });
+
+      const dispute = await prisma.dispute.create({
+        data: {
+          tradeId: trade.tradeId,
+          initiator: buyer.walletAddress,
+          reason: 'Default dispute status',
+        },
+      });
+
+      expect(goal.status).toBe('ACTIVE');
+      expect(vault.balanceUsdc).toBe('0');
+      expect(trade.status).toBe('CREATED');
+      expect(dispute.status).toBe('OPEN');
+    });
   });
 });

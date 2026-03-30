@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 
 import {
   AuditLogCard,
@@ -11,7 +11,8 @@ import {
   VaultValueCard,
 } from "@/components/vault";
 import { DriverManifestForm, type DriverManifestData } from "@/components/ui";
-import { useFreighterIdentity } from "@/hooks/useFreighterIdentity";
+import { useAuth } from "@/hooks/useAuth";
+import { api, type TradeStatsResponse, type TradeListResponse } from "@/lib/api";
 
 const FOOTER_CONTENT = {
   version: "V4.8.2",
@@ -37,43 +38,78 @@ const PARTNERS = [
   "SiloBank",
 ];
 
-function hashToNumber(seed: string): number {
-  let hash = 0;
-
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = (hash << 5) - hash + seed.charCodeAt(i);
-    hash |= 0;
-  }
-
-  return Math.abs(hash);
-}
-
 export default function VaultPage() {
   const {
     address,
     shortAddress,
-    isAuthorized,
+    token,
+    isAuthenticated,
+    isWalletConnected,
     isWalletDetected,
-    isLoading,
+    isLoading: authLoading,
     connectWallet,
-  } = useFreighterIdentity();
+    authenticate,
+  } = useAuth();
 
-  const identitySeed = address ?? "guest";
-  const hash = hashToNumber(identitySeed);
-  const vaultValue = 1200000 + (hash % 3400000);
-  const escrowId = `${(hash % 9000) + 1000}-AX`;
-  const sequenceId = `${(hash % 990) + 10}-AF`;
+  const [stats, setStats] = useState<TradeStatsResponse | null>(null);
+  const [recentTrades, setRecentTrades] = useState<TradeListResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const walletStatus = isLoading
+  const [isManifestOpen, setIsManifestOpen] = useState(false);
+  const [manifestData, setManifestData] = useState<DriverManifestData | null>(null);
+
+  const fetchVaultData = async () => {
+    if (!token) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const [statsData, tradesData] = await Promise.all([
+        api.trades.getStats(token),
+        api.trades.list(token, { limit: 5 }),
+      ]);
+      setStats(statsData);
+      setRecentTrades(tradesData);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load vault data");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated && token) {
+      void fetchVaultData();
+    }
+  }, [isAuthenticated, token]);
+
+  const walletStatus = authLoading
     ? "Checking wallet"
-    : isAuthorized
-      ? "Wallet linked"
-      : isWalletDetected
-        ? "Permission required"
-        : "Freighter not detected";
+    : isAuthenticated
+      ? "Authenticated"
+      : isWalletConnected
+        ? "Wallet linked"
+        : isWalletDetected
+          ? "Permission required"
+          : "Freighter not detected";
 
-  const [isManifestOpen, setIsManifestOpen] = React.useState(false);
-  const [manifestData, setManifestData] = React.useState<DriverManifestData | null>(null);
+  const vaultValue = stats?.totalVolume ?? 0;
+  const escrowId = stats ? `${stats.totalTrades}-AX` : "0-AX";
+  const sequenceId = stats ? `${stats.openTrades}-AF` : "0-AF";
+
+  const auditEntries = recentTrades?.items.slice(0, 3).map((trade, index) => ({
+    type: index === 0 ? "biometric" as const : index === 1 ? "multi-sig" as const : "ledger" as const,
+    title: `Trade ${trade.status.toLowerCase().replace(/_/g, " ")}`,
+    metadata: `${new Date(trade.updatedAt).toLocaleString()} - ${trade.tradeId}`,
+  })) ?? [
+    {
+      type: "ledger" as const,
+      title: "No recent activity",
+      metadata: "Connect wallet to view",
+    },
+  ];
 
   return (
     <section className="min-h-full bg-bg-primary px-6 py-8 lg:px-10">
@@ -93,18 +129,24 @@ export default function VaultPage() {
               <span className="rounded-full bg-bg-elevated px-3 py-1 text-xs text-text-secondary">
                 {walletStatus}
               </span>
-              {!isAuthorized && (
+              {!isAuthenticated && (
                 <button
-                  onClick={() => void connectWallet()}
-                  disabled={isLoading}
+                  onClick={() => isWalletConnected ? authenticate() : connectWallet()}
+                  disabled={authLoading}
                   className="rounded-lg bg-gold px-4 py-2 text-sm font-semibold text-text-inverse transition-colors hover:bg-gold-hover disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isLoading ? "Connecting..." : "Connect Freighter"}
+                  {authLoading ? "Loading..." : isWalletConnected ? "Sign In" : "Connect Freighter"}
                 </button>
               )}
             </div>
           </div>
         </div>
+
+        {error && (
+          <div className="rounded-lg border border-status-danger/20 bg-status-danger/10 px-4 py-3 text-sm text-status-danger">
+            {error}
+          </div>
+        )}
 
         <div className="rounded-2xl border border-border-default bg-card p-4 md:p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -127,9 +169,9 @@ export default function VaultPage() {
 
         <VaultHero
           escrowId={escrowId}
-          custodyType={isAuthorized ? "Institutional Custody" : "Pending Wallet Authorization"}
-          status={isAuthorized ? "Funds Locked" : "Awaiting Wallet Link"}
-          isSecured={isAuthorized}
+          custodyType={isAuthenticated ? "Institutional Custody" : "Pending Wallet Authorization"}
+          status={isAuthenticated ? (stats?.openTrades ? "Funds Locked" : "No Active Trades") : "Awaiting Wallet Link"}
+          isSecured={isAuthenticated}
         />
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -137,13 +179,13 @@ export default function VaultPage() {
             <ReleaseSequenceCard
               sequenceId={sequenceId}
               steps={[
-                { label: "Agreement", date: "Oct 12, 2023", status: "completed" },
+                { label: "Agreement", date: stats ? `${stats.totalTrades} trades` : "—", status: "completed" },
                 {
-                  label: "Audit Phase",
-                  date: isAuthorized ? "In progress" : "Wallet pending",
+                  label: "Active Trades",
+                  date: isAuthenticated ? (loading ? "Loading..." : `${stats?.openTrades ?? 0} open`) : "Wallet pending",
                   status: "in-progress",
                 },
-                { label: "Final Release", date: "Est. Nov 04", status: "pending" },
+                { label: "Total Volume", date: `$${vaultValue.toLocaleString()}`, status: "pending" },
               ]}
             />
           </div>
@@ -152,24 +194,24 @@ export default function VaultPage() {
             <VaultValueCard
               value={vaultValue}
               currency="USD"
-              isInsured={isAuthorized}
+              isInsured={isAuthenticated}
               onReleaseFunds={() => undefined}
             />
           </div>
 
           <div className="md:col-span-2 lg:col-span-2">
             <ContractManifestCard
-              contractId={`AMN-${(hash % 900) + 100}-VLT-09`}
-              agreementDate="September 24, 2023"
+              contractId={recentTrades?.items[0]?.tradeId ?? "No active trades"}
+              agreementDate={recentTrades?.items[0]?.createdAt ? new Date(recentTrades.items[0].createdAt).toLocaleDateString() : "—"}
               settlementType="Immediate / Fiat-Backed"
               originParty={{
-                initials: "GB",
-                name: "Global Biotech Inc.",
+                initials: "BY",
+                name: recentTrades?.items[0]?.buyerAddress ? `${recentTrades.items[0].buyerAddress.slice(0, 8)}...` : "Buyer",
                 color: "teal",
               }}
               recipientParty={{
-                initials: "NS",
-                name: "Nova Solutions Ltd.",
+                initials: "SL",
+                name: recentTrades?.items[0]?.sellerAddress ? `${recentTrades.items[0].sellerAddress.slice(0, 8)}...` : "Seller",
                 color: "emerald",
               }}
               onExportPdf={() => undefined}
@@ -179,24 +221,8 @@ export default function VaultPage() {
 
           <div>
             <AuditLogCard
-              entries={[
-                {
-                  type: "biometric",
-                  title: "Biometric validation passed",
-                  metadata: "2m ago - 192.168.1.44",
-                },
-                {
-                  type: "multi-sig",
-                  title: "Multi-sig request broadcast",
-                  metadata: "1h ago - ID: 494022",
-                },
-                {
-                  type: "ledger",
-                  title: `Ledger sync ${address ? "confirmed" : "pending wallet"}`,
-                  metadata: "Yesterday - Block 182,990",
-                },
-              ]}
-              isLiveSync={isAuthorized}
+              entries={auditEntries}
+              isLiveSync={isAuthenticated}
             />
           </div>
 

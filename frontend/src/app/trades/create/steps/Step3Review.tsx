@@ -1,13 +1,10 @@
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { signTransaction } from "@stellar/freighter-api";
 import { useTrade } from "../TradeContext";
-
-// Simulates Soroban SDK tx submission — replace with real SDK call
-async function submitToSoroban(data: object): Promise<string> {
-  await new Promise((r) => setTimeout(r, 2500));
-  // TODO: integrate @stellar/stellar-sdk / soroban-client here
-  return `TX_HASH_${Math.random().toString(36).slice(2, 12).toUpperCase()}`;
-}
+import { useAuth } from "@/hooks/useAuth";
+import { api, apiConfig, ApiError } from "@/lib/api";
 
 type Row = { label: string; value: string };
 
@@ -21,9 +18,12 @@ function ReviewRow({ label, value }: Row) {
 }
 
 export default function Step3Review() {
+  const router = useRouter();
   const { data, setStep } = useTrade();
+  const { token, isAuthenticated, connectWallet, authenticate, isWalletConnected } = useAuth();
   const [loading, setLoading] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [tradeId, setTradeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const total =
@@ -31,14 +31,70 @@ export default function Step3Review() {
       ? (parseFloat(data.quantity) * parseFloat(data.pricePerUnit)).toLocaleString("en-NG")
       : "—";
 
+  const amountUsdc =
+    data.quantity && data.pricePerUnit
+      ? String(parseFloat(data.quantity) * parseFloat(data.pricePerUnit))
+      : "0";
+
+  const buyerLossBps = Math.round(data.buyerRatio * 100);
+  const sellerLossBps = Math.round(data.sellerRatio * 100);
+
   const handleSubmit = async () => {
+    if (!isAuthenticated || !token) {
+      setError("Please connect and authenticate your wallet first.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
+
     try {
-      const hash = await submitToSoroban(data);
-      setTxHash(hash);
-    } catch {
-      setError("Transaction failed. Please try again.");
+      const createResponse = await api.trades.create(token, {
+        sellerAddress: data.sellerAddress,
+        amountUsdc,
+        buyerLossBps,
+        sellerLossBps,
+      });
+
+      setTradeId(createResponse.tradeId);
+
+      const signResult = await signTransaction(createResponse.unsignedXdr, {
+        networkPassphrase: apiConfig.getStellarNetworkPassphrase(),
+      });
+
+      if (signResult.error !== undefined) {
+        throw new Error(signResult.error.message || "Failed to sign transaction");
+      }
+
+      const signedXdr = signResult.signedTxXdr;
+
+      const rpcUrl = apiConfig.getStellarRpcUrl();
+      const submitResponse = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "sendTransaction",
+          params: { transaction: signedXdr },
+        }),
+      });
+
+      const submitResult = await submitResponse.json();
+
+      if (submitResult.error) {
+        throw new Error(submitResult.error.message || "Transaction submission failed");
+      }
+
+      setTxHash(submitResult.result?.hash || createResponse.tradeId);
+    } catch (err) {
+      let errorMessage = "Transaction failed. Please try again.";
+      if (err instanceof ApiError) {
+        errorMessage = err.message;
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+      }
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -57,15 +113,58 @@ export default function Step3Review() {
           <p className="text-text-secondary text-sm mt-1">Funds locked in escrow vault</p>
         </div>
         <div className="w-full rounded-lg bg-bg-elevated border border-border-default px-4 py-3 text-left">
+          <p className="text-xs text-text-muted mb-1">Trade ID</p>
+          <p className="text-emerald font-mono text-sm break-all">{tradeId}</p>
+        </div>
+        <div className="w-full rounded-lg bg-bg-elevated border border-border-default px-4 py-3 text-left">
           <p className="text-xs text-text-muted mb-1">Transaction Hash</p>
           <p className="text-emerald font-mono text-sm break-all">{txHash}</p>
         </div>
-        <a
-          href="/trades"
+        <button
+          onClick={() => router.push(`/trades/${tradeId}`)}
           className="h-12 w-full flex items-center justify-center rounded-full bg-gradient-gold-cta text-text-inverse font-semibold"
         >
-          View My Trades
+          View Trade Details
+        </button>
+        <a
+          href="/trades"
+          className="text-sm text-text-secondary hover:text-text-primary"
+        >
+          View All Trades
         </a>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-col items-center gap-6 py-6 text-center">
+        <div className="w-16 h-16 rounded-full bg-gold/10 flex items-center justify-center">
+          <svg className="w-8 h-8 text-gold" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+        </div>
+        <div>
+          <p className="text-text-primary font-semibold text-lg">Authentication Required</p>
+          <p className="text-text-secondary text-sm mt-1">
+            {isWalletConnected
+              ? "Sign in with your wallet to create trades."
+              : "Connect your Freighter wallet to create trades."}
+          </p>
+        </div>
+        <button
+          onClick={() => isWalletConnected ? authenticate() : connectWallet()}
+          disabled={loading}
+          className="h-12 w-full flex items-center justify-center rounded-full bg-gradient-gold-cta text-text-inverse font-semibold disabled:opacity-50"
+        >
+          {isWalletConnected ? "Sign In" : "Connect Wallet"}
+        </button>
+        <button
+          onClick={() => setStep(2)}
+          className="text-sm text-text-secondary hover:text-text-primary"
+        >
+          Go Back
+        </button>
       </div>
     );
   }
@@ -77,6 +176,7 @@ export default function Step3Review() {
         <ReviewRow label="Quantity" value={`${data.quantity} ${data.unit}`} />
         <ReviewRow label="Price per unit" value={`${data.currency} ${data.pricePerUnit}`} />
         <ReviewRow label="Total Value" value={`${data.currency} ${total}`} />
+        <ReviewRow label="USDC Amount" value={`${amountUsdc} USDC`} />
         <ReviewRow label="Seller Address" value={data.sellerAddress} />
         <ReviewRow label="Loss Ratio" value={`Buyer ${data.buyerRatio}% / Seller ${data.sellerRatio}%`} />
         <ReviewRow label="Delivery Window" value={`${data.deliveryDays} days`} />
@@ -84,8 +184,8 @@ export default function Step3Review() {
       </div>
 
       <div className="rounded-lg bg-gold-muted border border-gold/20 px-4 py-3 text-sm text-gold">
-        By submitting, you authorize a Stellar Path Payment converting {data.currency} to USDC,
-        locked in the Amana escrow contract.
+        By submitting, you authorize a Stellar transaction to create an escrow trade,
+        locking {amountUsdc} USDC in the Amana escrow contract.
       </div>
 
       {error && (
@@ -111,7 +211,7 @@ export default function Step3Review() {
                 <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
                 <path d="M12 2a10 10 0 0 1 10 10" />
               </svg>
-              Locking Funds…
+              Creating Trade...
             </>
           ) : (
             "Lock Funds & Create Trade"

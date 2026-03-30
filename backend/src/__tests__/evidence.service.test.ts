@@ -14,7 +14,7 @@ const TRADE_ID = "trade-001";
 function createMockPrisma() {
     return {
         trade: { findUnique: jest.fn() },
-        tradeEvidence: { findMany: jest.fn() },
+        tradeEvidence: { findMany: jest.fn(), create: jest.fn() },
     } as unknown as PrismaClient;
 }
 
@@ -42,7 +42,10 @@ describe("EvidenceService", () => {
 
     beforeEach(() => {
         prisma = createMockPrisma();
-        service = new EvidenceService(prisma);
+        service = new EvidenceService(prisma, {
+            uploadFile: jest.fn(),
+            getFileUrl: jest.fn((cid: string) => `https://ipfs.example/${cid}`),
+        } as any);
     });
 
     describe("uploadVideoEvidence validation and access", () => {
@@ -145,5 +148,74 @@ describe("EvidenceService", () => {
         await expect(
             service.getEvidenceByTradeId(TRADE_ID, BUYER)
         ).rejects.toBeInstanceOf(EvidenceTradeNotFoundError);
+    });
+
+    it("allows two concurrent evidence uploads and both are visible in list", async () => {
+        prisma.trade.findUnique = jest.fn().mockResolvedValue(mockTrade);
+        (service as any).ipfs.uploadFile = jest
+            .fn()
+            .mockResolvedValueOnce("bafybeicid-1")
+            .mockResolvedValueOnce("bafybeicid-2");
+        prisma.tradeEvidence.create = jest
+            .fn()
+            .mockResolvedValueOnce({
+                id: 11,
+                tradeId: TRADE_ID,
+                cid: "bafybeicid-1",
+                filename: "proof-1.mp4",
+                mimeType: "video/mp4",
+                uploadedBy: BUYER.toLowerCase(),
+                createdAt: new Date("2026-03-01T00:00:00Z"),
+            })
+            .mockResolvedValueOnce({
+                id: 12,
+                tradeId: TRADE_ID,
+                cid: "bafybeicid-2",
+                filename: "proof-2.mp4",
+                mimeType: "video/mp4",
+                uploadedBy: SELLER.toLowerCase(),
+                createdAt: new Date("2026-03-01T00:00:01Z"),
+            });
+        prisma.tradeEvidence.findMany = jest.fn().mockResolvedValue([
+            {
+                id: 11,
+                tradeId: TRADE_ID,
+                cid: "bafybeicid-1",
+                filename: "proof-1.mp4",
+                mimeType: "video/mp4",
+                uploadedBy: BUYER.toLowerCase(),
+                createdAt: new Date("2026-03-01T00:00:00Z"),
+            },
+            {
+                id: 12,
+                tradeId: TRADE_ID,
+                cid: "bafybeicid-2",
+                filename: "proof-2.mp4",
+                mimeType: "video/mp4",
+                uploadedBy: SELLER.toLowerCase(),
+                createdAt: new Date("2026-03-01T00:00:01Z"),
+            },
+        ]);
+
+        const makeFile = (name: string) => ({
+            originalname: name,
+            mimetype: "video/mp4",
+            buffer: Buffer.from("file"),
+        }) as Express.Multer.File;
+
+        const [first, second] = await Promise.all([
+            service.uploadVideoEvidence(TRADE_ID, BUYER, makeFile("proof-1.mp4")),
+            service.uploadVideoEvidence(TRADE_ID, SELLER, makeFile("proof-2.mp4")),
+        ]);
+
+        expect(first.evidenceId).toBe(11);
+        expect(second.evidenceId).toBe(12);
+
+        const listed = await service.getEvidenceByTradeId(TRADE_ID, BUYER);
+        expect(listed).toHaveLength(2);
+        expect(listed.map((item) => item.cid)).toEqual([
+            "bafybeicid-1",
+            "bafybeicid-2",
+        ]);
     });
 });

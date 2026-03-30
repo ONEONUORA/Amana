@@ -8,6 +8,7 @@ import {
   AuditLogCard,
   NetworkBackboneCard,
   VaultFooter,
+  PaymentOverviewCard,
 } from "@/components/vault";
 
 // Mock data - in production, this would come from an API or database
@@ -19,7 +20,11 @@ const VAULT_DATA = {
   sequenceId: "882-AF",
   steps: [
     { label: "Agreement", date: "Oct 12, 2023", status: "completed" as const },
-    { label: "Audit Phase", date: "Processing...", status: "in-progress" as const },
+    {
+      label: "Audit Phase",
+      date: "Processing...",
+      status: "in-progress" as const,
+    },
     { label: "Final Release", date: "Est. Nov 04", status: "pending" as const },
   ],
   vaultValue: 2480000,
@@ -59,6 +64,10 @@ const VAULT_DATA = {
   ],
   networkDescription:
     "Secured and powered by the Stellar network for instantaneous cross-border settlement and verifiable transparency.",
+  paymentOverview: {
+    totalUsdc: 2480000,
+    ngnRate: 1580,
+  },
   footer: {
     version: "V4.8.2",
     links: [
@@ -132,7 +141,15 @@ export function VaultDashboard() {
             <AuditLogCard entries={VAULT_DATA.auditLog} isLiveSync />
           </div>
 
-          {/* Row 3: Network Backbone (full width) */}
+          {/* Row 3: Payment Overview */}
+          <div className="lg:col-span-5">
+            <PaymentOverviewCard
+              totalUsdc={VAULT_DATA.paymentOverview.totalUsdc}
+              ngnRate={VAULT_DATA.paymentOverview.ngnRate}
+            />
+          </div>
+
+          {/* Row 4: Network Backbone (full width) */}
           <div className="lg:col-span-12">
             <NetworkBackboneCard description={VAULT_DATA.networkDescription} />
           </div>

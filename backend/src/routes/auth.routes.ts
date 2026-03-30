@@ -2,7 +2,9 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { StrKey } from '@stellar/stellar-sdk';
+import jwt from 'jsonwebtoken';
 import { AuthService } from '../services/auth.service';
+import { authMiddleware, AuthRequest } from '../middleware/auth.middleware';
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -50,6 +52,19 @@ router.post('/verify', limiter, async (req, res) => {
     } else {
       res.status(401).json({ error: err.message });
     }
+  }
+});
+
+router.post('/logout', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const jti = req.user?.jti;
+    const exp = req.user?.exp;
+    if (jti && exp) {
+      await AuthService.revokeToken(jti, exp);
+    }
+    res.json({ message: 'Logged out successfully' });
+  } catch {
+    res.status(500).json({ error: 'Logout failed' });
   }
 });
 

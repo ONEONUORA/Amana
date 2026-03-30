@@ -5,6 +5,8 @@ import {
     ManifestConflictError,
     ManifestTradeStatusError,
     ManifestTradeNotFoundError,
+    ManifestAccessDeniedError,
+    ManifestNotFoundError,
 } from "../services/manifest.service";
 
 function createMockPrisma() {
@@ -65,6 +67,26 @@ describe("ManifestService", () => {
         );
     });
 
+    it("produces deterministic SHA256 hashes for same input", async () => {
+        prisma.trade.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            sellerAddress: SELLER,
+            buyerAddress: BUYER,
+            status: TradeStatus.FUNDED,
+        });
+        prisma.deliveryManifest.findUnique = jest.fn().mockResolvedValue(null);
+        prisma.deliveryManifest.create = jest
+            .fn()
+            .mockResolvedValueOnce({ id: 41 })
+            .mockResolvedValueOnce({ id: 42 });
+
+        const first = await service.submitManifest({ ...baseInput, tradeId: "trade-001-A" });
+        const second = await service.submitManifest({ ...baseInput, tradeId: "trade-001-B" });
+
+        expect(first.driverNameHash).toBe(second.driverNameHash);
+        expect(first.driverIdHash).toBe(second.driverIdHash);
+    });
+
     it("throws ManifestForbiddenError when caller is the buyer", async () => {
         prisma.trade.findUnique = jest.fn().mockResolvedValue({
             tradeId: TRADE_ID,
@@ -92,6 +114,48 @@ describe("ManifestService", () => {
         );
     });
 
+    it("maps unique-constraint race on create to ManifestConflictError", async () => {
+        prisma.trade.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            sellerAddress: SELLER,
+            buyerAddress: BUYER,
+            status: TradeStatus.FUNDED,
+        });
+        prisma.deliveryManifest.findUnique = jest.fn().mockResolvedValue(null);
+        prisma.deliveryManifest.create = jest.fn().mockRejectedValue({ code: "P2002" });
+
+        await expect(service.submitManifest(baseInput)).rejects.toBeInstanceOf(
+            ManifestConflictError,
+        );
+    });
+
+    it("allows one of two concurrent submissions and rejects the other with conflict", async () => {
+        prisma.trade.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            sellerAddress: SELLER,
+            buyerAddress: BUYER,
+            status: TradeStatus.FUNDED,
+        });
+        prisma.deliveryManifest.findUnique = jest.fn().mockResolvedValue(null);
+        prisma.deliveryManifest.create = jest
+            .fn()
+            .mockResolvedValueOnce({ id: 100 })
+            .mockRejectedValueOnce({ code: "P2002" });
+
+        const [first, second] = await Promise.allSettled([
+            service.submitManifest(baseInput),
+            service.submitManifest(baseInput),
+        ]);
+
+        const statuses = [first.status, second.status].sort();
+        expect(statuses).toEqual(["fulfilled", "rejected"]);
+
+        const rejected = [first, second].find(
+            (entry): entry is PromiseRejectedResult => entry.status === "rejected",
+        );
+        expect(rejected?.reason).toBeInstanceOf(ManifestConflictError);
+    });
+
     it("throws ManifestTradeStatusError when trade is not FUNDED", async () => {
         prisma.trade.findUnique = jest.fn().mockResolvedValue({
             tradeId: TRADE_ID,
@@ -110,6 +174,89 @@ describe("ManifestService", () => {
 
         await expect(service.submitManifest(baseInput)).rejects.toBeInstanceOf(
             ManifestTradeNotFoundError
+        );
+    });
+
+    it("returns masked manifest for buyer retrieval", async () => {
+        prisma.trade.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            sellerAddress: SELLER,
+            buyerAddress: BUYER,
+            status: TradeStatus.FUNDED,
+        });
+        prisma.deliveryManifest.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            driverName: "Driver Name",
+            driverIdNumber: "ID-12345",
+            vehicleRegistration: "ABC-123",
+            routeDescription: "Lagos to Abuja",
+            expectedDeliveryAt: new Date("2026-03-30T12:00:00.000Z"),
+            driverNameHash: "a".repeat(64),
+            driverIdHash: "b".repeat(64),
+            createdAt: new Date("2026-03-30T10:00:00.000Z"),
+        });
+
+        const result = await service.getManifestByTradeId(TRADE_ID, BUYER);
+        expect(result.roleView).toBe("buyer");
+        expect((result as any).driverName).toBe("D****");
+        expect((result as any).driverIdNumber).toBe("ID-****");
+        expect((result as any).driverNameHash).toBeUndefined();
+    });
+
+    it("returns hash-only manifest for mediator retrieval", async () => {
+        const MEDIATOR = "GCMEDIATOR000000000000000000000000000000000000000000000";
+        process.env.ADMIN_STELLAR_PUBKEYS = MEDIATOR;
+
+        prisma.trade.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            sellerAddress: SELLER,
+            buyerAddress: BUYER,
+            status: TradeStatus.FUNDED,
+        });
+        prisma.deliveryManifest.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            driverName: "Driver Name",
+            driverIdNumber: "ID-12345",
+            vehicleRegistration: "ABC-123",
+            routeDescription: "Lagos to Abuja",
+            expectedDeliveryAt: new Date("2026-03-30T12:00:00.000Z"),
+            driverNameHash: "a".repeat(64),
+            driverIdHash: "b".repeat(64),
+            createdAt: new Date("2026-03-30T10:00:00.000Z"),
+        });
+
+        const result = await service.getManifestByTradeId(TRADE_ID, MEDIATOR);
+        expect(result.roleView).toBe("mediator");
+        expect((result as any).driverNameHash).toBe("a".repeat(64));
+        expect((result as any).driverIdHash).toBe("b".repeat(64));
+        expect((result as any).driverName).toBeUndefined();
+        expect((result as any).driverIdNumber).toBeUndefined();
+    });
+
+    it("throws ManifestAccessDeniedError for unrelated manifest retrieval caller", async () => {
+        prisma.trade.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            sellerAddress: SELLER,
+            buyerAddress: BUYER,
+            status: TradeStatus.FUNDED,
+        });
+
+        await expect(
+            service.getManifestByTradeId(TRADE_ID, "GCSTRANGER000000000000000000000000000000000000000000000"),
+        ).rejects.toBeInstanceOf(ManifestAccessDeniedError);
+    });
+
+    it("throws ManifestNotFoundError when manifest retrieval finds no row", async () => {
+        prisma.trade.findUnique = jest.fn().mockResolvedValue({
+            tradeId: TRADE_ID,
+            sellerAddress: SELLER,
+            buyerAddress: BUYER,
+            status: TradeStatus.FUNDED,
+        });
+        prisma.deliveryManifest.findUnique = jest.fn().mockResolvedValue(null);
+
+        await expect(service.getManifestByTradeId(TRADE_ID, BUYER)).rejects.toBeInstanceOf(
+            ManifestNotFoundError,
         );
     });
 });

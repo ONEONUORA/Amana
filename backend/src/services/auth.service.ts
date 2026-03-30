@@ -8,6 +8,7 @@ import { findOrCreateUser } from './user.service';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const redis = new Redis(REDIS_URL);
 const CHALLENGE_PREFIX = 'challenge:';
+const REVOKED_PREFIX = 'revoked_jti:';
 const CHALLENGE_TTL = 300; // 5 min
 
 export class AuthService {
@@ -47,19 +48,42 @@ export class AuthService {
     // Ensure user exists
     await findOrCreateUser(walletAddress);
 
-    const payload = {
-      walletAddress: walletAddress.toLowerCase(),
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (parseInt(process.env.JWT_EXPIRES_IN || '86400') || 86400),
-    };
-
     const secret = process.env.JWT_SECRET;
     if (!secret) {
       throw new Error('JWT_SECRET not set');
     }
 
+    const ttl = parseInt(process.env.JWT_EXPIRES_IN || '86400') || 86400;
+    const now = Math.floor(Date.now() / 1000);
+    const jti = crypto.randomUUID();
+
+    const payload = {
+      sub: walletAddress.toLowerCase(),
+      walletAddress: walletAddress.toLowerCase(),
+      jti,
+      iss: process.env.JWT_ISSUER || 'amana',
+      aud: process.env.JWT_AUDIENCE || 'amana-api',
+      iat: now,
+      nbf: now,
+      exp: now + ttl,
+    };
+
     const token = jwt.sign(payload, secret, { algorithm: 'HS256' });
     return token;
+  }
+
+  /** Add a token's jti to the revocation denylist. TTL matches remaining token lifetime. */
+  static async revokeToken(jti: string, expiresAt: number): Promise<void> {
+    const ttl = expiresAt - Math.floor(Date.now() / 1000);
+    if (ttl <= 0) return; // already expired — no need to store
+    const key = `${REVOKED_PREFIX}${jti}`;
+    await redis.set(key, '1', 'EX', ttl);
+  }
+
+  /** Returns true if the jti has been revoked. */
+  static async isTokenRevoked(jti: string): Promise<boolean> {
+    const key = `${REVOKED_PREFIX}${jti}`;
+    return (await redis.exists(key)) === 1;
   }
 }
 

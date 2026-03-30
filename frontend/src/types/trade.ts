@@ -27,6 +27,19 @@ export interface TimelineEvent {
   };
 }
 
+export type TransactionEventStatus = "completed" | "active" | "pending";
+
+export type TransactionEventActor = "system" | "buyer" | "seller" | "driver";
+
+export interface TransactionEvent {
+  id: string;
+  title: string;
+  actor: TransactionEventActor;
+  status?: TransactionEventStatus;
+  timestamp?: string;
+  description?: string;
+}
+
 export interface LossRatio {
   label: string;
   value: number; // percentage 0-100
@@ -61,6 +74,10 @@ export interface TradeDetail {
 
   // Timeline
   timeline: TimelineEvent[];
+
+  // Chronological transaction timeline
+  transactionTimeline?: TransactionEvent[];
+  currentTransactionIndex?: number;
 
   // Optional loss ratios
   lossRatios?: LossRatio[];
