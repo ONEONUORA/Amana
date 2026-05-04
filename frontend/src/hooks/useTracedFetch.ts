@@ -15,7 +15,7 @@ import { tracedHttpClient, TracedResponse, TracedRequestOptions } from '../lib/t
 export interface UseTracedFetchOptions extends TracedRequestOptions {
   retryCount?: number;
   retryDelay?: number;
-  onSuccess?: (data: any) => void;
+  onSuccess?: (data: unknown) => void;
   onError?: (error: Error) => void;
 }
 
@@ -31,7 +31,7 @@ export interface TracedFetchState<T> {
 /**
  * Hook for making traced HTTP requests with state management
  */
-export function useTracedFetch<T = any>(defaultOptions: UseTracedFetchOptions = {}) {
+export function useTracedFetch<T = unknown>(defaultOptions: UseTracedFetchOptions = {}) {
   const [state, setState] = useState<TracedFetchState<T>>({
     data: null,
     loading: false,
@@ -181,16 +181,16 @@ export function useTracedFetch<T = any>(defaultOptions: UseTracedFetchOptions = 
     return request('GET', url, options);
   }, [request]);
 
-  const post = useCallback((url: string, data?: any, options: UseTracedFetchOptions = {}) => {
-    return request('POST', url, { ...options, body: data });
+  const post = useCallback((url: string, data?: unknown, options: UseTracedFetchOptions = {}) => {
+    return request('POST', url, { ...options, body: data !== undefined ? JSON.stringify(data) : undefined });
   }, [request]);
 
-  const put = useCallback((url: string, data?: any, options: UseTracedFetchOptions = {}) => {
-    return request('PUT', url, { ...options, body: data });
+  const put = useCallback((url: string, data?: unknown, options: UseTracedFetchOptions = {}) => {
+    return request('PUT', url, { ...options, body: data !== undefined ? JSON.stringify(data) : undefined });
   }, [request]);
 
-  const patch = useCallback((url: string, data?: any, options: UseTracedFetchOptions = {}) => {
-    return request('PATCH', url, { ...options, body: data });
+  const patch = useCallback((url: string, data?: unknown, options: UseTracedFetchOptions = {}) => {
+    return request('PATCH', url, { ...options, body: data !== undefined ? JSON.stringify(data) : undefined });
   }, [request]);
 
   const del = useCallback((url: string, options: UseTracedFetchOptions = {}) => {
@@ -230,7 +230,7 @@ export function useTracedFetch<T = any>(defaultOptions: UseTracedFetchOptions = 
 /**
  * Hook for making traced GET requests (simplified)
  */
-export function useTracedGet<T = any>(url: string | null, options: UseTracedFetchOptions = {}) {
+export function useTracedGet<T = unknown>(url: string | null, options: UseTracedFetchOptions = {}) {
   const { data, loading, error, correlationId, requestId, get } = useTracedFetch<T>(options);
 
   // Auto-fetch when URL changes
@@ -248,13 +248,13 @@ export function useTracedGet<T = any>(url: string | null, options: UseTracedFetc
 /**
  * Hook for making traced mutations (POST, PUT, PATCH, DELETE)
  */
-export function useTracedMutation<T = any>(options: UseTracedFetchOptions = {}) {
+export function useTracedMutation<T = unknown>(options: UseTracedFetchOptions = {}) {
   const { data, loading, error, correlationId, requestId, post, put, patch, delete: del } = useTracedFetch<T>(options);
 
   const mutate = useCallback(async (
     method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     url: string,
-    data?: any
+    data?: unknown
   ) => {
     switch (method) {
       case 'POST':
@@ -277,9 +277,9 @@ export function useTracedMutation<T = any>(options: UseTracedFetchOptions = {}) 
     correlationId,
     requestId,
     mutate,
-    post: (url: string, data?: any) => post(url, data, options),
-    put: (url: string, data?: any) => put(url, data, options),
-    patch: (url: string, data?: any) => patch(url, data, options),
+    post: (url: string, data?: unknown) => post(url, data, options),
+    put: (url: string, data?: unknown) => put(url, data, options),
+    patch: (url: string, data?: unknown) => patch(url, data, options),
     delete: (url: string) => del(url, options),
   };
 }

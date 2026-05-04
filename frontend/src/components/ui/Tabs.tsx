@@ -2,12 +2,12 @@
 
 import React from "react";
 
-export interface TabItem<T = string> {
+export interface TabItem<T extends React.Key = string> {
   value: T;
   label: string;
 }
 
-export interface TabsProps<T = string> {
+export interface TabsProps<T extends React.Key = string> {
   items: TabItem<T>[];
   activeValue: T;
   onChange: (value: T) => void;
@@ -15,7 +15,7 @@ export interface TabsProps<T = string> {
   className?: string;
 }
 
-export function Tabs<T = string>({
+export function Tabs<T extends React.Key = string>({
   items,
   activeValue,
   onChange,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { CheckCircle, AlertTriangle, XCircle, Info, X } from "lucide-react";
 import { ToastMessage } from "@/types/toast";
 import { clsx } from "clsx";
@@ -19,6 +19,14 @@ export function Toast({
 }: ToastProps) {
   const [isClosing, setIsClosing] = useState(false);
 
+  const handleClose = useCallback(() => {
+    setIsClosing(true);
+    // Wait for the slide-out/fade-out animation to finish before actually removing it
+    setTimeout(() => {
+      onClose(id);
+    }, 300); // 300ms matches our transition duration
+  }, [id, onClose]);
+
   useEffect(() => {
     if (duration > 0) {
       const timer = setTimeout(() => {
@@ -26,15 +34,7 @@ export function Toast({
       }, duration);
       return () => clearTimeout(timer);
     }
-  }, [duration]);
-
-  const handleClose = () => {
-    setIsClosing(true);
-    // Wait for the slide-out/fade-out animation to finish before actually removing it
-    setTimeout(() => {
-      onClose(id);
-    }, 300); // 300ms matches our transition duration
-  };
+  }, [duration, handleClose]);
 
   const IconMap = {
     success: CheckCircle,

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { AppTopNav } from "@/components/layout/AppTopNav";
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { useFreighterIdentity } from "@/hooks/useFreightonIdentity";
+import { useFreighterIdentity } from "@/hooks/useFreighterIdentity";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);

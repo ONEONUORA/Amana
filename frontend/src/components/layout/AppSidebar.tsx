@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { useFreighterIdentity } from "@/hooks/useFreightonIdentity";
+import { useFreighterIdentity } from "@/hooks/useFreighterIdentity";
 import { SideNavBar } from "@/components/layout/SideNavBar";
 import { clsx } from "clsx";
 

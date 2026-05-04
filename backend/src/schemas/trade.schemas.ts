@@ -11,7 +11,8 @@ export const createTradeSchema = z.object({
   buyerLossBps: z.number().int().min(0, "buyerLossBps must be >= 0").max(10000, "buyerLossBps must be <= 10000").optional(),
   sellerLossBps: z.number().int().min(0, "sellerLossBps must be >= 0").max(10000, "sellerLossBps must be <= 10000").optional(),
   description: z.string().optional(),
-}).superRefine((data, ctx) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+}).superRefine((data: any, ctx: any) => {
   const buyer = data.buyerLossBps ?? 5000;
   const seller = data.sellerLossBps ?? 5000;
   if (buyer + seller !== 10000) {
@@ -25,8 +26,8 @@ export const tradeIdParamSchema = z.object({
 
 export const listTradesQuerySchema = z.object({
   status: z.nativeEnum(TradeStatus).optional(),
-  page: z.preprocess((val) => Number(val), z.number().int().min(1).default(1)),
-  limit: z.preprocess((val) => Number(val), z.number().int().min(1).max(100).default(20)),
+  page: z.preprocess((val: unknown) => Number(val), z.number().int().min(1).default(1)),
+  limit: z.preprocess((val: unknown) => Number(val), z.number().int().min(1).max(100).default(20)),
   sort: z.string().optional(),
 });
 

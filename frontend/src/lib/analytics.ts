@@ -279,7 +279,7 @@ class AnalyticsService {
       if (typeof value === 'string') {
         masked[key] = this.maskString(value);
       } else if (typeof value === 'object' && value !== null) {
-        masked[key] = this.maskObject(value);
+        masked[key] = this.maskObject(value as Record<string, unknown>);
       } else {
         masked[key] = value;
       }

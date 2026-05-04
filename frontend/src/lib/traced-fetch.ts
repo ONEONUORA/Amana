@@ -13,7 +13,7 @@ export interface TracedRequestOptions extends RequestInit {
   timeout?: number;
 }
 
-export interface TracedResponse<T = any> extends Response {
+export interface TracedResponse<T = unknown> extends Response {
   data?: T;
   correlationId?: string;
   requestId?: string;
@@ -165,7 +165,7 @@ export class TracedHttpClient {
   /**
    * Make HTTP request with tracing
    */
-  private async request<T = any>(
+  private async request<T = unknown>(
     method: string,
     url: string,
     options: TracedRequestOptions = {}
@@ -240,12 +240,13 @@ export class TracedHttpClient {
         const error = new Error(
           `HTTP ${response.status}: ${response.statusText}` +
           (data && typeof data === 'object' && 'message' in data 
-            ? ` - ${(data as any).message}` 
+            ? ` - ${(data as Record<string, unknown>).message}` 
             : '')
         );
-        (error as any).status = response.status;
-        (error as any).response = tracedResponse;
-        throw error;
+        const httpError = error as Error & { status?: number; response?: TracedResponse<T> };
+        httpError.status = response.status;
+        httpError.response = tracedResponse;
+        throw httpError;
       }
 
       return tracedResponse;
@@ -267,14 +268,14 @@ export class TracedHttpClient {
   /**
    * GET request
    */
-  async get<T = any>(url: string, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
+  async get<T = unknown>(url: string, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
     return this.request<T>('GET', url, options);
   }
 
   /**
    * POST request
    */
-  async post<T = any>(url: string, data?: any, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
+  async post<T = unknown>(url: string, data?: unknown, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
     return this.request<T>('POST', url, {
       ...options,
       body: data ? JSON.stringify(data) : undefined,
@@ -284,7 +285,7 @@ export class TracedHttpClient {
   /**
    * PUT request
    */
-  async put<T = any>(url: string, data?: any, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
+  async put<T = unknown>(url: string, data?: unknown, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
     return this.request<T>('PUT', url, {
       ...options,
       body: data ? JSON.stringify(data) : undefined,
@@ -294,7 +295,7 @@ export class TracedHttpClient {
   /**
    * PATCH request
    */
-  async patch<T = any>(url: string, data?: any, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
+  async patch<T = unknown>(url: string, data?: unknown, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
     return this.request<T>('PATCH', url, {
       ...options,
       body: data ? JSON.stringify(data) : undefined,
@@ -304,14 +305,14 @@ export class TracedHttpClient {
   /**
    * DELETE request
    */
-  async delete<T = any>(url: string, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
+  async delete<T = unknown>(url: string, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
     return this.request<T>('DELETE', url, options);
   }
 
   /**
    * Upload file with tracing
    */
-  async upload<T = any>(url: string, file: File, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
+  async upload<T = unknown>(url: string, file: File, options: TracedRequestOptions = {}): Promise<TracedResponse<T>> {
     const formData = new FormData();
     formData.append('file', file);
 

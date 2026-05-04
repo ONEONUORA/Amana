@@ -91,6 +91,7 @@ export default function VaultPage() {
 
   useEffect(() => {
     if (isAuthenticated && token) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void fetchVaultData();
     }
   }, [isAuthenticated, token, fetchVaultData]);

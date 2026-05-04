@@ -378,6 +378,7 @@ export default function VaultManagePage() {
   }, [token]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (isAuthenticated && token) void fetchData();
   }, [isAuthenticated, token, fetchData]);
 
