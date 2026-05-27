@@ -18,6 +18,10 @@ const config: Config = {
     '**/__tests__/**/*.[jt]s?(x)',
     '**/?(*.)+(spec|test).[jt]s?(x)',
   ],
+  testPathIgnorePatterns: [
+    '<rootDir>/tests/',
+    '<rootDir>/node_modules/',
+  ],
   collectCoverageFrom: [
     'src/**/*.{js,jsx,ts,tsx}',
     '!src/**/*.d.ts',
