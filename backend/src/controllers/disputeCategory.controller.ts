@@ -8,6 +8,7 @@ import {
   DisputeCategoryNotFoundError,
   DisputeCategoryNameConflictError,
 } from "../services/disputeCategory.service";
+import { isMediatorAddress } from "../lib/accessControl";
 
 const createCategorySchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(100, "Name must be 100 characters or fewer"),
@@ -31,14 +32,6 @@ const listCategoriesQuerySchema = z.object({
     .transform((v: string) => v === "true")
     .optional(),
 });
-
-function isMediatorAddress(address: string): boolean {
-  const mediatorAddresses = (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
-    .split(",")
-    .map((a) => a.trim())
-    .filter(Boolean);
-  return mediatorAddresses.includes(address);
-}
 
 export class DisputeCategoryController {
   constructor(private categoryService: DisputeCategoryService) {}
