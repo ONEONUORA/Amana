@@ -33,11 +33,13 @@ const listCategoriesQuerySchema = z.object({
 });
 
 function isMediatorAddress(address: string): boolean {
-  const mediatorAddresses = (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
-    .split(",")
-    .map((a) => a.trim())
-    .filter(Boolean);
-  return mediatorAddresses.includes(address);
+  const mediatorAddresses = new Set(
+    (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
+      .split(",")
+      .map((a) => a.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return mediatorAddresses.has(address.toLowerCase());
 }
 
 export class DisputeCategoryController {

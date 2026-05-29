@@ -45,10 +45,13 @@ export class DisputeService {
     const { status, page = 1, limit = 10 } = params;
     const offset = (page - 1) * limit;
 
-    const mediatorAddresses = (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
-      .split(",")
-      .map(addr => addr.trim());
-    if (!mediatorAddresses.includes(mediatorAddress)) {
+    const mediatorAddresses = new Set(
+      (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
+        .split(",")
+        .map(addr => addr.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    if (!mediatorAddresses.has(mediatorAddress.toLowerCase())) {
       throw new AppError(ErrorCode.AUTH_ERROR, "Unauthorized: Not a mediator", 403);
     }
 
@@ -125,10 +128,13 @@ export class DisputeService {
     mediatorAddress: string,
     newStatus: DisputeStatus
   ): Promise<DisputeResponse> {
-    const mediatorAddresses = (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
-      .split(",")
-      .map(addr => addr.trim());
-    if (!mediatorAddresses.includes(mediatorAddress)) {
+    const mediatorAddresses = new Set(
+      (process.env.ADMIN_STELLAR_PUBKEYS ?? "")
+        .split(",")
+        .map(addr => addr.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    if (!mediatorAddresses.has(mediatorAddress.toLowerCase())) {
       throw new AppError(ErrorCode.AUTH_ERROR, "Unauthorized: Not a mediator", 403);
     }
 
