@@ -37,6 +37,10 @@ const envSchema = z.object({
   // Webhook configuration
   WEBHOOK_URL: z.string().url().optional(),
   WEBHOOK_SECRET: z.string().optional(),
+  // Ops alert webhook configuration
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
+  ALERT_WEBHOOK_SECRET: z.string().optional(),
+  ALERT_COOLDOWN_MS: z.coerce.number().default(300_000),
 });
 
 export const env = envSchema.parse(processEnv);

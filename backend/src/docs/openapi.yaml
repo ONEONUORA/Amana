@@ -280,20 +280,24 @@ components:
           properties:
             database:
               $ref: "#/components/schemas/HealthIndicator"
+            redis:
+              $ref: "#/components/schemas/HealthIndicator"
             indexer:
               $ref: "#/components/schemas/HealthIndicator"
-          required: [database, indexer]
+          required: [database, redis, indexer]
         details:
           type: object
           properties:
             databaseLatency:
+              type: number
+            redisLatency:
               type: number
             indexerLagSeconds:
               type: number
             lastProcessedLedger:
               type: integer
               nullable: true
-          required: [databaseLatency, indexerLagSeconds, lastProcessedLedger]
+          required: [databaseLatency, redisLatency, indexerLagSeconds, lastProcessedLedger]
       required: [status, timestamp, uptime, checks, details]
     LivenessResponse:
       type: object
@@ -742,7 +746,7 @@ paths:
       tags: [Health]
       summary: Run a comprehensive health check
       description: |-
-        Returns composite health state for database and indexer dependencies.
+        Returns composite health state for database, Redis cache, and indexer dependencies.
         Error code references: `INFRA_ERROR`, `INTERNAL_ERROR`.
       responses:
         "200":

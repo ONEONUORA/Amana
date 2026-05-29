@@ -1,8 +1,11 @@
 import { HealthService } from "../services/health.service";
+import { AlertService } from "../services/alert.service";
 
 describe("HealthService", () => {
     let healthService: HealthService;
     let mockPrisma: any;
+    let mockRedis: { ping: jest.Mock };
+    let mockAlerts: { dispatch: jest.Mock };
 
     beforeEach(() => {
         mockPrisma = {
@@ -11,8 +14,18 @@ describe("HealthService", () => {
                 findFirst: jest.fn(),
             },
         };
+        mockRedis = {
+            ping: jest.fn().mockResolvedValue("PONG"),
+        };
+        mockAlerts = {
+            dispatch: jest.fn().mockResolvedValue(undefined),
+        };
 
-        healthService = new HealthService(mockPrisma);
+        healthService = new HealthService(
+            mockPrisma,
+            mockRedis,
+            mockAlerts as unknown as AlertService,
+        );
     });
 
     describe("performHealthCheck", () => {
@@ -27,8 +40,10 @@ describe("HealthService", () => {
 
             expect(result.status).toBe("healthy");
             expect(result.checks.database.status).toBe("up");
+            expect(result.checks.redis.status).toBe("up");
             expect(result.checks.indexer.status).toBe("up");
             expect(result.details.lastProcessedLedger).toBe(12345);
+            expect(mockAlerts.dispatch).not.toHaveBeenCalled();
         });
 
         it("should return unhealthy status when database check fails", async () => {
@@ -42,6 +57,30 @@ describe("HealthService", () => {
 
             expect(result.status).toBe("unhealthy");
             expect(result.checks.database.status).toBe("down");
+            expect(mockAlerts.dispatch).toHaveBeenCalledWith(
+                "db_connection_failure",
+                expect.stringContaining("Database check failed"),
+                expect.objectContaining({ responseTime: expect.any(Number) }),
+            );
+        });
+
+        it("should return unhealthy status when redis check fails", async () => {
+            mockPrisma.$queryRaw.mockResolvedValue([{ health_check: 1 }]);
+            mockRedis.ping.mockRejectedValue(new Error("Redis connection refused"));
+            mockPrisma.processedLedger.findFirst.mockResolvedValue({
+                ledgerSequence: 12345,
+                processedAt: new Date(),
+            });
+
+            const result = await healthService.performHealthCheck();
+
+            expect(result.status).toBe("unhealthy");
+            expect(result.checks.redis.status).toBe("down");
+            expect(mockAlerts.dispatch).toHaveBeenCalledWith(
+                "redis_connection_failure",
+                expect.stringContaining("Redis check failed"),
+                expect.objectContaining({ responseTime: expect.any(Number) }),
+            );
         });
 
         it("should return unhealthy status when indexer lag exceeds threshold", async () => {
@@ -103,6 +142,7 @@ describe("HealthService", () => {
 
             expect(result.uptime).toBeGreaterThanOrEqual(0);
             expect(result.timestamp).toBeDefined();
+            expect(result.details.redisLatency).toBeGreaterThanOrEqual(0);
         });
 
         it("should handle database query timeout", async () => {
