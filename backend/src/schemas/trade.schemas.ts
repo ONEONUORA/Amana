@@ -21,13 +21,13 @@ export const createTradeSchema = z.object({
 });
 
 export const tradeIdParamSchema = z.object({
-  id: z.string().uuid("Invalid trade ID format"),
+  id: z.string().min(1, "Trade ID is required"),
 });
 
 export const listTradesQuerySchema = z.object({
   status: z.nativeEnum(TradeStatus).optional(),
-  page: z.preprocess((val: unknown) => Number(val), z.number().int().min(1).default(1)),
-  limit: z.preprocess((val: unknown) => Number(val), z.number().int().min(1).max(100).default(20)),
+  page: z.preprocess((val: unknown) => val === undefined ? undefined : Number(val), z.number().int().min(1).default(1)),
+  limit: z.preprocess((val: unknown) => val === undefined ? undefined : Number(val), z.number().int().min(1).max(100).default(20)),
   sort: z.string().optional(),
 });
 
@@ -42,7 +42,8 @@ export const initiateDisputeSchema = z
       .optional(),
     categoryId: z.number().int().positive("categoryId must be a positive integer").optional(),
   })
-  .superRefine((data: { category?: string; categoryId?: number }, ctx: z.RefinementCtx) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  .superRefine((data: { category?: string; categoryId?: number }, ctx: any) => {
     if (!data.category && data.categoryId === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

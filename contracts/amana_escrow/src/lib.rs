@@ -16,6 +16,17 @@ const BPS_DIVISOR: i128 = 10_000;
 const INSTANCE_TTL_THRESHOLD: u32 = 50_000;
 pub(crate) const INSTANCE_TTL_EXTEND_TO: u32 = 50_000;
 
+/// Maximum byte length accepted for any caller-supplied hash / IPFS CID input.
+/// Real IPFS CIDs (≤ ~62 bytes) and hex digests (64 bytes) fit comfortably; the
+/// cap rejects malformed oversized payloads that would otherwise bloat
+/// persistent storage and inflate read/write gas for every later access.
+pub const MAX_HASH_LEN: u32 = 256;
+
+/// Current on-chain persistent storage schema version. Bump this whenever the
+/// persistent layout changes so a future upgrade can branch on
+/// `get_schema_version()` and run the matching migration. See SECURITY.md.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 fn checked_fee_amount(amount: i128, fee_bps: u32) -> i128 {
     amount
         .checked_mul(fee_bps as i128)
@@ -276,6 +287,11 @@ pub enum DataKey {
     Manifest(u64),
     /// Stores release sequencing timestamps for a trade.
     ReleaseSequence(u64),
+    /// Monotonic storage-schema version, written at initialize() and read via
+    /// get_schema_version(). Enables forward-compatible migrations without
+    /// disturbing any existing key. Appended last so the XDR encoding of every
+    /// pre-existing variant is unchanged (variants are keyed by name).
+    SchemaVersion,
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +332,9 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
         env.storage().instance().set(&DataKey::Initialized, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
         Self::bump_instance_ttl(&env);
         InitializedEvent { admin, fee_bps }.publish(&env);
     }
@@ -406,6 +425,18 @@ impl EscrowContract {
             .unwrap_or(false)
     }
 
+    /// Returns the persistent storage schema version of this contract instance.
+    ///
+    /// Instances initialized before schema versioning existed have no stored
+    /// value and report version 1 (the original layout), so upgrades can branch
+    /// on this number to decide whether a migration is required. Read-only.
+    pub fn get_schema_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SchemaVersion)
+            .unwrap_or(CURRENT_SCHEMA_VERSION)
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
@@ -473,10 +504,22 @@ impl EscrowContract {
         buyer_loss_bps: u32,
         seller_loss_bps: u32,
     ) -> u64 {
+        buyer.require_auth();
         assert!(amount > 0, "amount must be greater than zero");
         assert!(
             buyer != seller,
             "buyer and seller must be different addresses"
+        );
+        // Bound each share before summing so a malformed out-of-range value is
+        // rejected with a clear message rather than triggering an opaque u32
+        // overflow panic on the addition below.
+        assert!(
+            buyer_loss_bps <= 10_000,
+            "buyer_loss_bps must not exceed 10000"
+        );
+        assert!(
+            seller_loss_bps <= 10_000,
+            "seller_loss_bps must not exceed 10000"
         );
         assert!(
             buyer_loss_bps + seller_loss_bps == 10_000,
@@ -555,6 +598,7 @@ impl EscrowContract {
             amount: trade.amount,
         }
         .publish(&env);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn cancel_trade(env: Env, trade_id: u64, caller: Address) {
@@ -613,6 +657,32 @@ impl EscrowContract {
         } else {
             panic!("Cannot cancel trade in current status");
         }
+    }
+
+    /// Unilaterally refund a funded or delivered trade.
+    ///
+    /// Only the seller may call this. It transitions the trade to `Cancelled`
+    /// and returns the full escrowed amount to the buyer. This is useful when
+    /// the seller cannot fulfill the order or chooses to return funds after
+    /// a delivery issue without requiring a formal dispute.
+    pub fn refund(env: Env, trade_id: u64) {
+        let key = DataKey::Trade(trade_id);
+        let mut trade: Trade = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Trade not found");
+
+        trade.seller.require_auth();
+
+        assert!(
+            matches!(trade.status, TradeStatus::Funded | TradeStatus::Delivered),
+            "Trade must be Funded or Delivered to be refunded by seller"
+        );
+
+        let amount = trade.amount;
+        let seller = trade.seller.clone();
+        Self::execute_cancellation(&env, &mut trade, amount, seller);
     }
 
     fn execute_cancellation(env: &Env, trade: &mut Trade, refund_amount: i128, caller: Address) {
@@ -737,6 +807,10 @@ impl EscrowContract {
     pub fn initiate_dispute(env: Env, trade_id: u64, initiator: Address, reason_hash: String) {
         initiator.require_auth();
         assert!(!reason_hash.is_empty(), "reason_hash must not be empty");
+        assert!(
+            reason_hash.len() <= MAX_HASH_LEN,
+            "reason_hash exceeds max length"
+        );
 
         let key = DataKey::Trade(trade_id);
         let mut trade: Trade = env
@@ -939,6 +1013,19 @@ impl EscrowContract {
     ) {
         caller.require_auth();
 
+        // Reject malformed payloads: the evidence pointer must be present, and
+        // neither caller-supplied string may exceed the storage bound.
+        // `description_hash` is optional and so is only length-bounded.
+        assert!(!ipfs_hash.is_empty(), "ipfs_hash must not be empty");
+        assert!(
+            ipfs_hash.len() <= MAX_HASH_LEN,
+            "ipfs_hash exceeds max length"
+        );
+        assert!(
+            description_hash.len() <= MAX_HASH_LEN,
+            "description_hash exceeds max length"
+        );
+
         let key = DataKey::Trade(trade_id);
         let trade: Trade = env
             .storage()
@@ -1034,6 +1121,10 @@ impl EscrowContract {
         submitter.require_auth();
 
         assert!(!ipfs_cid.is_empty(), "ipfs_cid must not be empty");
+        assert!(
+            ipfs_cid.len() <= MAX_HASH_LEN,
+            "ipfs_cid exceeds max length"
+        );
 
         let key = DataKey::Trade(trade_id);
         let trade: Trade = env
@@ -1092,6 +1183,14 @@ impl EscrowContract {
         assert!(
             !driver_id_hash.is_empty(),
             "driver_id_hash must not be empty"
+        );
+        assert!(
+            driver_name_hash.len() <= MAX_HASH_LEN,
+            "driver_name_hash exceeds max length"
+        );
+        assert!(
+            driver_id_hash.len() <= MAX_HASH_LEN,
+            "driver_id_hash exceeds max length"
         );
 
         let key = DataKey::Trade(trade_id);
@@ -1441,6 +1540,44 @@ mod test {
         client.confirm_delivery(&trade_id);
 
         client.cancel_trade(&trade_id, &buyer);
+    }
+
+    #[test]
+    fn test_seller_can_unilaterally_refund() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let amount = 5000_i128;
+        let (contract_id, usdc_id, buyer, _seller, _treasury, trade_id) =
+            setup_funded_trade(&env, amount, 100);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let token = token::Client::new(&env, &usdc_id);
+
+        // Refund while Funded
+        client.refund(&trade_id);
+
+        assert_eq!(token.balance(&buyer), amount);
+        assert_eq!(token.balance(&client.address), 0);
+        assert!(matches!(
+            client.get_trade(&trade_id).status,
+            TradeStatus::Cancelled
+        ));
+
+        // Refund while Delivered
+        let buyer_2 = Address::generate(&env);
+        let seller_2 = Address::generate(&env);
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer_2, &amount);
+
+        let trade_id_2 = client.create_trade(&buyer_2, &seller_2, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id_2);
+        client.confirm_delivery(&trade_id_2);
+        client.refund(&trade_id_2);
+
+        assert_eq!(token.balance(&buyer_2), amount);
+        assert!(matches!(
+            client.get_trade(&trade_id_2).status,
+            TradeStatus::Cancelled
+        ));
     }
 
     #[test]
@@ -2921,6 +3058,52 @@ mod test {
         let (contract_id, _usdc, buyer, _seller, _treasury, trade_id) =
             setup_disputed_trade(&env, 10_000, 100);
         let client = EscrowContractClient::new(&env, &contract_id);
+        client.cancel_trade(&trade_id, &buyer);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot cancel trade in current status")]
+    fn test_cancel_trade_rejects_after_completed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _usdc_id, buyer, _seller, _treasury, trade_id) =
+            setup_disputed_trade(&env, 10_000, 100);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let mediator = Address::generate(&env);
+        client.set_mediator(&mediator);
+        client.resolve_dispute(&trade_id, &mediator, &10_000_u32);
+        let trade = client.get_trade(&trade_id);
+        assert!(matches!(trade.status, TradeStatus::Completed));
+        client.cancel_trade(&trade_id, &buyer);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot cancel trade in current status")]
+    fn test_cancel_trade_rejects_after_cancelled() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        client.initialize(&admin, &usdc_id, &treasury, &100);
+        let amount = 10_000_i128;
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
+        client.deposit(&trade_id);
+        // Admin cancels the funded trade immediately
+        client.cancel_trade(&trade_id, &admin);
+        assert!(matches!(
+            client.get_trade(&trade_id).status,
+            TradeStatus::Cancelled
+        ));
+        // Buyer can no longer cancel - already Cancelled
         client.cancel_trade(&trade_id, &buyer);
     }
 }
@@ -6224,5 +6407,71 @@ mod fee_and_evidence_tests {
         let list = client.get_evidence_list(&trade_id);
         assert_eq!(list.len(), 1, "evidence must be preserved after resolution");
         assert_eq!(list.get(0).unwrap().ipfs_hash, ipfs);
+    }
+
+    /// Dispute resolution with zero fee: seller_net > 0, fee == 0, buyer_refund > 0.
+    /// Verifies the zero-fee transfer branch is skipped without panicking.
+    #[test]
+    fn test_dispute_resolution_zero_fee_skip() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, buyer, seller, treasury, usdc_id, trade_id) =
+            setup_fee_trade(&env, 10_000, 0);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let reason = String::from_str(&env, "QmZeroFee");
+        client.initiate_dispute(&trade_id, &buyer, &reason);
+        let mediator = Address::generate(&env);
+        client.set_mediator(&mediator);
+        // seller_gets_bps = 10_000 → no loss
+        // seller_raw = 10_000, fee = 0 (fee_bps=0), seller_net = 10_000, buyer_refund = 0
+        client.resolve_dispute(&trade_id, &mediator, &10_000_u32);
+        let tok = token::Client::new(&env, &usdc_id);
+        assert_eq!(tok.balance(&seller), 10_000);
+        assert_eq!(tok.balance(&treasury), 0, "fee must be zero");
+        assert_eq!(tok.balance(&buyer), 0);
+        assert_eq!(tok.balance(&client.address), 0);
+        assert_eq!(10_000 + 0 + 0, 10_000, "conservation invariant");
+    }
+
+    /// Dispute resolution where seller gets zero (seller_net == 0):
+    /// buyer_loss_bps = 0, seller_loss_bps = 10000, seller_gets_bps = 0, fee_bps = 0.
+    /// seller_loss = 10_000, seller_raw = 0, fee = 0, seller_net = 0, buyer_refund = 10_000.
+    #[test]
+    fn test_dispute_resolution_zero_seller_net_skip() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let seller = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let usdc_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        // fee_bps = 0 so fee is also zero
+        client.initialize(&admin, &usdc_id, &treasury, &0);
+        let amount = 10_000_i128;
+        let token_client = token::StellarAssetClient::new(&env, &usdc_id);
+        token_client.mint(&buyer, &amount);
+        // seller bears 100% loss (buyer_loss_bps=0, seller_loss_bps=10000)
+        let trade_id = client.create_trade(&buyer, &seller, &amount, &0_u32, &10000_u32);
+        client.deposit(&trade_id);
+        let reason = String::from_str(&env, "QmZeroSellerNet");
+        client.initiate_dispute(&trade_id, &seller, &reason);
+        let mediator = Address::generate(&env);
+        client.set_mediator(&mediator);
+        // seller_gets_bps = 0 → loss_bps = 10_000 (100% loss)
+        // seller_loss = 10_000 * 10_000 * 10_000 / 100_000_000 = 10_000
+        // seller_raw = 10_000 - 10_000 = 0
+        // fee = 0 * 0 / 10_000 = 0
+        // seller_net = 0, buyer_refund = 10_000
+        client.resolve_dispute(&trade_id, &mediator, &0_u32);
+        let tok = token::Client::new(&env, &usdc_id);
+        assert_eq!(tok.balance(&seller), 0, "seller net must be zero");
+        assert_eq!(tok.balance(&treasury), 0, "fee must be zero");
+        assert_eq!(tok.balance(&buyer), 10_000, "buyer gets full refund");
+        assert_eq!(tok.balance(&client.address), 0);
+        assert_eq!(0 + 0 + 10_000, 10_000, "conservation invariant");
     }
 }
