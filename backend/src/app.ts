@@ -19,6 +19,7 @@ import { disputeCategoryRoutes } from "./routes/disputeCategory.routes";
 import { createTreasuryRouter } from "./routes/treasury.routes";
 import userRoutes from "./routes/user.routes";
 import reputationRoutes from "./routes/reputation.routes";
+import { env } from "./config/env";
 
 /** Parse the CORS_ORIGINS env var into a usable allowlist.
  *  Value should be a comma-separated list of allowed origins, e.g.:
