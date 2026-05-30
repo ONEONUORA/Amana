@@ -1,6 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { StrKey } from "@stellar/stellar-sdk";
 import { signTransaction } from "@stellar/freighter-api";
 import { useTrade } from "../TradeContext";
 import { useAuth } from "@/hooks/useAuth";
@@ -23,29 +24,46 @@ export default function Step3Review() {
   const { data, setStep } = useTrade();
   const { token, isAuthenticated, connectWallet, authenticate, isWalletConnected } = useAuth();
   const [loading, setLoading] = useState(false);
+  const submittingRef = useRef(false);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [tradeId, setTradeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const total =
-    data.quantity && data.pricePerUnit
-      ? (parseFloat(data.quantity) * parseFloat(data.pricePerUnit)).toLocaleString("en-NG")
-      : "—";
+  const qty = parseFloat(data.quantity);
+  const price = parseFloat(data.pricePerUnit);
+  const rawAmount = !isNaN(qty) && !isNaN(price) ? qty * price : NaN;
 
-  const amountCngn =
-    data.quantity && data.pricePerUnit
-      ? String(parseFloat(data.quantity) * parseFloat(data.pricePerUnit))
-      : "0";
+  const total = !isNaN(rawAmount) && rawAmount > 0 ? rawAmount.toLocaleString("en-NG") : "—";
+
+  const amountCngn = !isNaN(rawAmount) && rawAmount > 0 ? rawAmount.toFixed(7) : "0";
+
+  const isAddressValid =
+    data.sellerAddress !== "" &&
+    StrKey.isValidEd25519PublicKey(data.sellerAddress.trim());
+  const isFormValid =
+    data.commodity !== "" &&
+    !isNaN(qty) && qty > 0 &&
+    !isNaN(price) && price > 0 &&
+    !isNaN(rawAmount) && rawAmount > 0 &&
+    isAddressValid &&
+    data.buyerRatio + data.sellerRatio === 100;
 
   const buyerLossBps = Math.round(data.buyerRatio * 100);
   const sellerLossBps = Math.round(data.sellerRatio * 100);
 
   const handleSubmit = async () => {
+    if (submittingRef.current) return;
     if (!isAuthenticated || !token) {
       setError("Please connect and authenticate your wallet first.");
       return;
     }
 
+    if (!isFormValid) {
+      setError("Please complete all required fields with valid values before submitting.");
+      return;
+    }
+
+    submittingRef.current = true;
     setLoading(true);
     setError(null);
 
@@ -97,6 +115,7 @@ export default function Step3Review() {
       }
       setError(errorMessage);
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   };
@@ -202,7 +221,7 @@ export default function Step3Review() {
           Back
         </button>
         <button
-          disabled={loading}
+          disabled={loading || !isFormValid}
           onClick={handleSubmit}
           className="flex-1 h-12 rounded-full bg-gradient-gold-cta text-text-inverse font-semibold disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >

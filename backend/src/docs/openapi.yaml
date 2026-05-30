@@ -28,9 +28,12 @@ tags:
   - name: Wallet
   - name: Users
   - name: Trades
+  - name: Disputes
+  - name: Dispute Categories
   - name: Manifest
   - name: Evidence
   - name: Audit Trail
+  - name: Treasury
   - name: Goals
 components:
   securitySchemes:
@@ -47,6 +50,23 @@ components:
       schema:
         type: string
       example: 4294967297
+    DisputeIdPath:
+      in: path
+      name: id
+      required: true
+      description: Trade identifier for the dispute.
+      schema:
+        type: string
+      example: 4294967297
+    DisputeCategoryIdPath:
+      in: path
+      name: id
+      required: true
+      description: Dispute category identifier.
+      schema:
+        type: integer
+        minimum: 1
+      example: 1
     UserAddressPath:
       in: path
       name: address
@@ -145,6 +165,14 @@ components:
       schema:
         type: string
       example: createdAt:desc
+    IncludeInactiveCategoriesQuery:
+      in: query
+      name: includeInactive
+      required: false
+      schema:
+        type: boolean
+        default: false
+      description: Include inactive dispute categories in the response.
     IdempotencyKeyHeader:
       in: header
       name: Idempotency-Key
@@ -433,6 +461,128 @@ components:
     TradeStatsResponse:
       type: object
       additionalProperties: true
+    DisputeCategory:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          nullable: true
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, isActive, createdAt, updatedAt]
+    DisputeCategoryListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DisputeCategory"
+      required: [items]
+    DisputeResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        tradeId:
+          type: string
+        initiator:
+          type: string
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [OPEN, UNDER_REVIEW, RESOLVED, CLOSED]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        trade:
+          type: object
+          properties:
+            buyerAddress:
+              type: string
+            sellerAddress:
+              type: string
+            amountUsdc:
+              type: string
+      required:
+        [id, tradeId, initiator, reason, status, createdAt, updatedAt, trade]
+    DisputeListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DisputeResponse"
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+            totalPages:
+              type: integer
+          required: [page, limit, total, totalPages]
+      required: [items, pagination]
+    DisputeTransitionRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [UNDER_REVIEW, RESOLVED, CLOSED]
+      required: [status]
+      example:
+        status: UNDER_REVIEW
+    DisputeCategoryMutationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        isActive:
+          type: boolean
+      required: [name]
+      example:
+        name: DAMAGE
+        description: Goods arrived damaged or unusable.
+    DisputeCategoryUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        isActive:
+          type: boolean
+      example:
+        isActive: false
     ManifestRequest:
       type: object
       properties:
@@ -918,6 +1068,242 @@ paths:
                 error: User not found
         "500":
           $ref: "#/components/responses/InternalError"
+  /dispute-categories:
+    get:
+      tags: [Dispute Categories]
+      summary: List dispute categories
+      description: Returns active categories by default. Admin wallets can include inactive categories.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IncludeInactiveCategoriesQuery"
+      responses:
+        "200":
+          description: Dispute categories returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeCategoryListResponse"
+        "400":
+          $ref: "#/components/responses/LegacyValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [Dispute Categories]
+      summary: Create a dispute category
+      description: Admin wallet access is required.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeCategoryMutationRequest"
+      responses:
+        "201":
+          description: Dispute category created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeCategory"
+        "400":
+          $ref: "#/components/responses/LegacyValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          description: Category name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /dispute-categories/{id}:
+    get:
+      tags: [Dispute Categories]
+      summary: Fetch a dispute category
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DisputeCategoryIdPath"
+      responses:
+        "200":
+          description: Dispute category returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeCategory"
+        "400":
+          $ref: "#/components/responses/LegacyValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    patch:
+      tags: [Dispute Categories]
+      summary: Update a dispute category
+      description: Admin wallet access is required.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DisputeCategoryIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeCategoryUpdateRequest"
+      responses:
+        "200":
+          description: Dispute category updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeCategory"
+        "400":
+          $ref: "#/components/responses/LegacyValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: Category name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [Dispute Categories]
+      summary: Deactivate a dispute category
+      description: Admin wallet access is required. The category is marked inactive.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DisputeCategoryIdPath"
+      responses:
+        "204":
+          description: Dispute category deactivated.
+        "400":
+          $ref: "#/components/responses/LegacyValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /disputes:
+    get:
+      tags: [Disputes]
+      summary: List disputes for mediators
+      description: |-
+        Returns paginated list of disputes accessible to the authenticated mediator.
+        Error code references: `AUTH_ERROR`, `INTERNAL_ERROR`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum: [OPEN, UNDER_REVIEW, RESOLVED, CLOSED]
+          description: Filter by dispute status
+        - in: query
+          name: page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          description: Number of items per page
+      responses:
+        "200":
+          description: Dispute list returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeListResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          description: Caller is not a mediator.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /disputes/{id}/transition:
+    post:
+      tags: [Disputes]
+      summary: Transition dispute status
+      description: |-
+        Mediator-only endpoint to transition a dispute to a new status.
+        Valid transitions: OPEN → UNDER_REVIEW → RESOLVED/CLOSED
+        Error code references: `AUTH_ERROR`, `DISPUTE_NOT_FOUND`, `DISPUTE_STATUS_TRANSITION_INVALID`, `DISPUTE_STATUS_CONFLICT`, `INTERNAL_ERROR`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DisputeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeTransitionRequest"
+      responses:
+        "200":
+          description: Dispute status transitioned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeResponse"
+        "400":
+          $ref: "#/components/responses/LegacyValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          description: Caller is not a mediator.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Dispute not found for the trade.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: Dispute was modified by another user (optimistic concurrency conflict).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /trades:
     post:
       tags: [Trades]
@@ -1133,7 +1519,8 @@ paths:
       summary: Initiate a dispute for a trade
       description: |-
         Supports optional `Idempotency-Key`.
-        Route validation requires a reason of at least 10 characters.
+        Route validation requires a reason of at least 10 characters and either `category`
+        or `categoryId`. The category must match an active dispute category.
         Error code references: `AUTH_ERROR`, `VALIDATION_ERROR`, `DOMAIN_ERROR`, `NOT_FOUND`, `INTERNAL_ERROR`.
       security:
         - bearerAuth: []
@@ -1152,7 +1539,12 @@ paths:
                   minLength: 10
                 category:
                   type: string
-              required: [reason, category]
+                  description: Active dispute category name.
+                categoryId:
+                  type: integer
+                  minimum: 1
+                  description: Active dispute category id.
+              required: [reason]
             example:
               reason: Goods arrived damaged at delivery point.
               category: DAMAGE
@@ -1460,6 +1852,103 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /treasury/balance:
+    get:
+      tags: [Treasury]
+      summary: Fetch the treasury balance
+      description: |-
+        Returns the current balance of the escrow contract treasury.
+        Requires admin authorization via ADMIN_STELLAR_PUBKEYS env.
+        Error code references: `AUTH_ERROR`, `INFRA_ERROR`, `INTERNAL_ERROR`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Treasury balance retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  balance:
+                    type: string
+                  asset:
+                    type: string
+                  contractId:
+                    type: string
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /treasury/withdraw:
+    post:
+      tags: [Treasury]
+      summary: Withdraw funds from the treasury
+      description: |-
+        Withdraws tokens from the escrow contract treasury.
+        Only admin wallets can perform this operation.
+        Error code references: `AUTH_ERROR`, `DOMAIN_ERROR`, `INFRA_ERROR`, `INTERNAL_ERROR`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                destination:
+                  type: string
+                  description: Stellar public key to receive the funds.
+                amount:
+                  type: string
+                  description: Amount to withdraw in USDC.
+              required: [destination, amount]
+      responses:
+        "200":
+          description: Withdrawal transaction built.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unsignedXdr:
+                    type: string
+        "400":
+          $ref: "#/components/responses/LegacyValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /treasury/config:
+    get:
+      tags: [Treasury]
+      summary: Fetch treasury configuration
+      description: |-
+        Returns the current treasury configuration including contract ID and network.
+        Error code references: `AUTH_ERROR`, `INTERNAL_ERROR`.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Treasury configuration retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contractId:
+                    type: string
+                  network:
+                    type: string
+                  asset:
+                    type: string
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "500":
           $ref: "#/components/responses/InternalError"
   /goals:

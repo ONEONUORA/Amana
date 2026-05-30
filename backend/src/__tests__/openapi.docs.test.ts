@@ -5,19 +5,35 @@ const YAML = require("yamljs");
 
 type OpenApiOperation = {
   security?: Array<Record<string, unknown>>;
-  parameters?: Array<{ name?: string; in?: string }>;
+  parameters?: Array<{ name?: string; in?: string; $ref?: string }>;
 };
 
-type OpenApiPathItem = Partial<Record<"get" | "post" | "put" | "delete" | "patch", OpenApiOperation>>;
+type OpenApiPathItem = Partial<
+  Record<"get" | "post" | "put" | "delete" | "patch", OpenApiOperation>
+>;
 
 describe("OpenAPI documentation coverage", () => {
   const docsDir = path.join(__dirname, "..", "docs");
   const yamlPath = path.join(docsDir, "openapi.yaml");
   const jsonPath = path.join(docsDir, "openapi.json");
-  const spec = YAML.load(yamlPath) as { paths: Record<string, OpenApiPathItem> };
+  const spec = YAML.load(yamlPath) as {
+    paths: Record<string, OpenApiPathItem>;
+  };
   const jsonSpec = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as {
     paths: Record<string, OpenApiPathItem>;
   };
+
+  function resolvesHeaderParameter(
+    parameter: { name?: string; in?: string; $ref?: string },
+    name: string,
+  ) {
+    if (parameter.in === "header" && parameter.name === name) {
+      return true;
+    }
+
+    const refName = parameter.$ref?.replace("#/components/parameters/", "");
+    return refName === name || refName === `${name.replace(/-/g, "")}Header`;
+  }
 
   const liveRouteMap: Record<string, Array<keyof OpenApiPathItem>> = {
     "/health": ["get"],
@@ -30,6 +46,10 @@ describe("OpenAPI documentation coverage", () => {
     "/wallet/path-payment-quote": ["get"],
     "/users/me": ["get", "put"],
     "/users/{address}": ["get"],
+    "/disputes": ["get"],
+    "/disputes/{id}/transition": ["post"],
+    "/dispute-categories": ["get", "post"],
+    "/dispute-categories/{id}": ["get", "patch", "delete"],
     "/trades": ["get", "post"],
     "/trades/stats": ["get"],
     "/trades/{id}": ["get"],
@@ -52,6 +72,13 @@ describe("OpenAPI documentation coverage", () => {
     ["/wallet/path-payment-quote", "get"],
     ["/users/me", "get"],
     ["/users/me", "put"],
+    ["/disputes", "get"],
+    ["/disputes/{id}/transition", "post"],
+    ["/dispute-categories", "get"],
+    ["/dispute-categories", "post"],
+    ["/dispute-categories/{id}", "get"],
+    ["/dispute-categories/{id}", "patch"],
+    ["/dispute-categories/{id}", "delete"],
     ["/trades", "get"],
     ["/trades", "post"],
     ["/trades/stats", "get"],
@@ -90,7 +117,9 @@ describe("OpenAPI documentation coverage", () => {
 
   it("marks every protected endpoint with bearer authentication", () => {
     for (const [route, method] of protectedOperations) {
-      expect(spec.paths[route]?.[method]?.security).toEqual([{ bearerAuth: [] }]);
+      expect(spec.paths[route]?.[method]?.security).toEqual([
+        { bearerAuth: [] },
+      ]);
     }
   });
 
@@ -98,12 +127,29 @@ describe("OpenAPI documentation coverage", () => {
     for (const [route, method] of idempotentOperations) {
       const parameters = spec.paths[route]?.[method]?.parameters ?? [];
       expect(
-        parameters.some((parameter) => parameter.in === "header" && parameter.name === "Idempotency-Key"),
+        parameters.some((parameter) =>
+          resolvesHeaderParameter(parameter, "Idempotency-Key"),
+        ),
       ).toBe(true);
     }
   });
 
   it("keeps openapi.json in sync with openapi.yaml", () => {
-    expect(jsonSpec).toEqual(spec);
+    // Strip operationIds (auto-generated at runtime) for comparison
+    function stripOperationIds(obj: unknown): unknown {
+      if (Array.isArray(obj)) return obj.map(stripOperationIds);
+      if (obj && typeof obj === "object") {
+        const copy: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(
+          obj as Record<string, unknown>,
+        )) {
+          if (key === "operationId") continue;
+          copy[key] = stripOperationIds(value);
+        }
+        return copy;
+      }
+      return obj;
+    }
+    expect(stripOperationIds(jsonSpec)).toEqual(stripOperationIds(spec));
   });
 });

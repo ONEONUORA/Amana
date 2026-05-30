@@ -15,6 +15,8 @@ export type {
   EvidenceRecord,
   EvidenceResponse,
   PathPaymentQuote,
+  SubmitManifestRequest,
+  SubmitManifestResponse,
   TradeHistoryEvent,
   TradeHistoryResponse,
   TradeListResponse,

@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-# cdylib is only needed for WASM deployment; rlib is used for tests on native
-crate-type = ["rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 # Enable this when building the WASM contract artifact
@@ -39,3 +38,7 @@ path = "tests/auth_matrix_tests.rs"
 [[test]]
 name = "dispute_stress_tests"
 path = "tests/dispute_stress_tests.rs"
+
+[[test]]
+name = "event_emission_tests"
+path = "tests/event_emission_tests.rs"
