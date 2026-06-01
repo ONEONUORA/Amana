@@ -1,19 +1,15 @@
 import request from "supertest";
 import { createApp } from "../app";
 
-var mockQueryRaw: jest.Mock;
-var mockFindFirst: jest.Mock;
+const mockPerformHealthCheck = jest.fn();
 
-jest.mock("../lib/db", () => {
-  mockQueryRaw = jest.fn();
-  mockFindFirst = jest.fn();
+jest.mock("../services/health.service", () => {
+  const actual = jest.requireActual("../services/health.service");
   return {
-    prisma: {
-      $queryRaw: mockQueryRaw,
-      processedLedger: {
-        findFirst: mockFindFirst,
-      },
-    },
+    ...actual,
+    HealthService: jest.fn().mockImplementation(() => ({
+      performHealthCheck: mockPerformHealthCheck,
+    })),
   };
 });
 
@@ -23,10 +19,19 @@ describe("GET /health", () => {
   });
 
   it("should return 200 with healthy status when DB is connected", async () => {
-    mockQueryRaw.mockResolvedValue([{ "?column?": 1 }]);
-    mockFindFirst.mockResolvedValue({
-      ledgerSequence: 12345,
-      processedAt: new Date(),
+    mockPerformHealthCheck.mockResolvedValue({
+      status: "healthy",
+      timestamp: new Date().toISOString(),
+      uptime: 1000,
+      checks: {
+        database: { status: "up", message: "Database connection healthy", responseTime: 5 },
+        indexer: { status: "up", message: "Indexer healthy", responseTime: 3 },
+      },
+      details: {
+        databaseLatency: 5,
+        indexerLagSeconds: 0,
+        lastProcessedLedger: 12345,
+      },
     });
 
     const app = createApp();
@@ -45,10 +50,19 @@ describe("GET /health", () => {
   });
 
   it("should return 503 when DB is disconnected", async () => {
-    mockQueryRaw.mockRejectedValue(new Error("connection failed"));
-    mockFindFirst.mockResolvedValue({
-      ledgerSequence: 12345,
-      processedAt: new Date(),
+    mockPerformHealthCheck.mockResolvedValue({
+      status: "unhealthy",
+      timestamp: new Date().toISOString(),
+      uptime: 1000,
+      checks: {
+        database: { status: "down", message: "Database check failed", responseTime: 10 },
+        indexer: { status: "up", message: "Indexer healthy", responseTime: 3 },
+      },
+      details: {
+        databaseLatency: 10,
+        indexerLagSeconds: 0,
+        lastProcessedLedger: 12345,
+      },
     });
 
     const app = createApp();
@@ -65,10 +79,19 @@ describe("GET /health", () => {
   });
 
   it("should include valid ISO timestamp", async () => {
-    mockQueryRaw.mockRejectedValue(new Error("down"));
-    mockFindFirst.mockResolvedValue({
-      ledgerSequence: 12345,
-      processedAt: new Date(),
+    mockPerformHealthCheck.mockResolvedValue({
+      status: "unhealthy",
+      timestamp: new Date().toISOString(),
+      uptime: 1000,
+      checks: {
+        database: { status: "down", message: "Database check failed", responseTime: 10 },
+        indexer: { status: "up", message: "Indexer healthy", responseTime: 3 },
+      },
+      details: {
+        databaseLatency: 10,
+        indexerLagSeconds: 0,
+        lastProcessedLedger: 12345,
+      },
     });
 
     const app = createApp();
