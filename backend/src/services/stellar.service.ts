@@ -141,13 +141,21 @@ public async getAccountBalance(publicKey: string, assetCode: string = TOKEN_CONF
       );
       return transaction.toXDR();
     } catch (error: unknown) {
-      const outcome = classifySubmissionError(error as any);
+      const outcome = classifySubmissionError(error);
       recordTransactionSubmission(
         "build_transaction",
         outcome,
         performance.now() - start,
       );
-      const status = (error as any)?.response?.status;
+      const status =
+        error !== null &&
+        typeof error === "object" &&
+        "response" in error &&
+        error.response !== null &&
+        typeof error.response === "object" &&
+        "status" in error.response
+          ? (error.response as { status: unknown }).status
+          : undefined;
       if (status === 404) {
         appLogger.error({ error, sourceAccount }, "Source account not found");
         throw new Error("Source account does not exist");
@@ -178,7 +186,7 @@ public async getAccountBalance(publicKey: string, assetCode: string = TOKEN_CONF
             this.networkPassphrase,
           );
 
-          const response = await this.sorobanRpc.sendTransaction(transaction as any);
+          const response = await this.sorobanRpc.sendTransaction(transaction);
 
           if (!response?.status) {
             recordTransactionSubmission(
@@ -291,7 +299,7 @@ public async getAccountBalance(publicKey: string, assetCode: string = TOKEN_CONF
           });
           return response;
         } catch (error: unknown) {
-          const outcome = classifySubmissionError(error as any);
+          const outcome = classifySubmissionError(error);
           if (
             outcome !== "contract_panic" &&
             outcome !== "rpc_error"
@@ -322,7 +330,10 @@ public async getAccountBalance(publicKey: string, assetCode: string = TOKEN_CONF
             throw error;
           }
 
-          const code = (error as any)?.code;
+          const code =
+            error !== null && typeof error === "object" && "code" in error
+              ? (error as { code: unknown }).code
+              : undefined;
           const isTimeout =
             code === "ETIMEDOUT" ||
             code === "ECONNABORTED" ||

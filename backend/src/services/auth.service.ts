@@ -1,4 +1,3 @@
-import Redis from 'ioredis';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { Keypair, StrKey } from '@stellar/stellar-sdk';
@@ -6,9 +5,8 @@ import { Request } from 'express';
 import { findOrCreateUser } from './user.service';
 import { AppError, ErrorCode, isAppError } from '../errors/errorCodes';
 import { env } from '../config/env';
+import { redis } from '../lib/redis';
 
-const REDIS_URL = process.env.REDIS_URL ?? env.REDIS_URL;
-const redis = new Redis(REDIS_URL);
 const CHALLENGE_PREFIX = 'challenge:';
 const REVOKED_PREFIX = 'revoked_jti:';
 const CHALLENGE_TTL = 300; // 5 min
