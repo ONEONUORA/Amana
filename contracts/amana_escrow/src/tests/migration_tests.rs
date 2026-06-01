@@ -76,7 +76,7 @@ mod migration_tests {
         let old_client = EscrowContractClient::new(&env, &old_contract);
 
         let trade_id =
-            old_client.create_trade(&buyer, &seller, &10_000_i128, &5000_u32, &5000_u32);
+            old_client.create_trade(&buyer, &seller, &10_000_i128, &5000_u32, &5000_u32, &None);
         old_client.deposit(&trade_id);
 
         // Verify trade is bound to token-A
@@ -145,7 +145,7 @@ mod migration_tests {
         old_client.set_mediator(&mediator);
 
         let trade_id =
-            old_client.create_trade(&buyer, &seller, &10_000_i128, &5000_u32, &5000_u32);
+            old_client.create_trade(&buyer, &seller, &10_000_i128, &5000_u32, &5000_u32, &None);
         old_client.deposit(&trade_id);
         old_client.initiate_dispute(
             &trade_id,
@@ -198,9 +198,9 @@ mod migration_tests {
 
         // Create 3 trades before migration
         let amount = 10_000_i128;
-        let t1 = old_client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32);
-        let t2 = old_client.create_trade(&buyer, &seller, &amount, &3000_u32, &7000_u32);
-        let t3 = old_client.create_trade(&buyer, &seller, &amount, &7000_u32, &3000_u32);
+        let t1 = old_client.create_trade(&buyer, &seller, &amount, &5000_u32, &5000_u32, &None);
+        let t2 = old_client.create_trade(&buyer, &seller, &amount, &3000_u32, &7000_u32, &None);
+        let t3 = old_client.create_trade(&buyer, &seller, &amount, &7000_u32, &3000_u32, &None);
 
         old_client.deposit(&t1);
         old_client.deposit(&t2);
@@ -255,7 +255,7 @@ mod migration_tests {
         let client = EscrowContractClient::new(&env, &contract_id);
 
         let trade_id =
-            client.create_trade(&buyer, &seller, &10_000_i128, &5000_u32, &5000_u32);
+            client.create_trade(&buyer, &seller, &10_000_i128, &5000_u32, &5000_u32, &None);
 
         let token_at_creation = client.get_trade(&trade_id).token.clone();
 
