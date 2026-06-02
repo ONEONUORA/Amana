@@ -61,7 +61,7 @@ export class DisputeController {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const tradeId = typeof req.params.id === "string" ? req.params.id : req.params.id[0];
+    const tradeId = req.params.id as string;
     const { status } = req.body as { status: DisputeStatus };
 
     try {
